@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>K-Guard Dashboard</title>
+<meta http-equiv="refresh" content="5">
+<style>
+  body { font-family: -apple-system, sans-serif; background:#0e0f12; color:#e6e6e6; margin:2rem; }
+  h1 { color:#f0f0f0; }
+  .status { display:flex; gap:1rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+  .card { background:#1a1c20; border-radius:8px; padding:0.75rem 1rem; }
+  .ok { color:#5ce65c; }
+  .warn { color:#e6b85c; }
+  table { border-collapse: collapse; width:100%; }
+  th, td { text-align:left; padding:0.4rem 0.6rem; border-bottom:1px solid #2a2c30; font-size:0.9rem; }
+  th { color:#9aa; }
+  .sev-critical { color:#ff5c5c; font-weight:bold; }
+  .sev-high { color:#ff9a5c; }
+  .sev-medium { color:#e6d05c; }
+  .sev-low { color:#8fbf8f; }
+  .blocked { background:#123018; }
+</style>
+</head>
+<body>
+<h1>K-Guard</h1>
+<div class="status">
+  <div class="card">Enforcement (LSM pre-exec block): <span class="{{if .LSMEnabled}}ok{{else}}warn{{end}}">{{if .LSMEnabled}}ACTIVE{{else}}DETECT-ONLY{{end}}</span></div>
+  <div class="card">Active sensors: {{range .Sensors}}{{.}} {{end}}</div>
+  <div class="card">Total alerts shown: {{len .Alerts}}</div>
+</div>
+<table>
+<tr><th>Time</th><th>Severity</th><th>Event</th><th>Rule</th><th>Comm</th><th>PID</th><th>Path / Detail</th><th>Action</th></tr>
+{{range .Alerts}}
+<tr class="{{if .Blocked}}blocked{{end}}">
+  <td>{{fmtTime .Timestamp}}</td>
+  <td class="sev-{{.Severity}}">{{.Severity}}</td>
+  <td>{{.EventType}}</td>
+  <td>{{.RuleName}}</td>
+  <td>{{.Comm}}</td>
+  <td>{{.Pid}}</td>
+  <td>{{if .Filename}}{{.Filename}}{{else}}{{.Detail}}{{end}}{{if .DestIP}} -> {{.DestIP}}:{{.DestPort}}{{end}}</td>
+  <td>{{.Action}}{{if .Blocked}} (blocked){{end}}</td>
+</tr>
+{{end}}
+</table>
+</body>
+</html>

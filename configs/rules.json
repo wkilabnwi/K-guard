@@ -1,0 +1,71 @@
+{
+  "rules": [
+    {
+      "name": "Reverse shell (nc), known path, hard block",
+      "match": "exact_path",
+      "pattern": "/usr/bin/nc",
+      "severity": "critical",
+      "action": "BLOCK"
+    },
+    {
+      "name": "Reverse shell (nc) from suspicious path, detect+kill",
+      "match": "basename",
+      "pattern": "nc",
+      "severity": "critical",
+      "action": "KILL",
+      "suspicious_path_only": true
+    },
+    {
+      "name": "Crypto miner (xmrig) : known path, hard block",
+      "match": "exact_path",
+      "pattern": "/usr/local/bin/xmrig",
+      "severity": "critical",
+      "action": "BLOCK"
+    },
+    {
+      "name": "Crypto miner (xmrig) : any path, detect+kill",
+      "match": "basename",
+      "pattern": "xmrig",
+      "severity": "critical",
+      "action": "KILL"
+    },
+    {
+      "name": "Raw socket sniffer (tcpdump) outside admin allowlist",
+      "match": "basename",
+      "pattern": "tcpdump",
+      "severity": "medium",
+      "action": "ALERT",
+      "suspicious_path_only": true
+    },
+    {
+      "name": "Binary executed from /dev/shm",
+      "match": "prefix",
+      "pattern": "/dev/shm/",
+      "severity": "high",
+      "action": "KILL",
+      "suspicious_path_only": false
+    }
+  ],
+
+  "allowlist": [
+    "/usr/bin/tcpdump",
+    "/usr/sbin/tcpdump"
+  ],
+
+  "protected_pids": [],
+  "protected_comms": ["sshd", "systemd", "systemd-journald"],
+  "suspicious_path": ["/testkill/", "/tmp/"],
+
+  "enforcement_enabled": true,
+  "dedup_window_seconds": 10,
+
+  "sinks": {
+    "stdout": true,
+    "syslog": false,
+    "webhook_url": "",
+    "store_path": "/var/lib/kguard/",
+    "metrics_listen_addr": ":9090",
+    "dashboard_listen_addr": ":8080"
+  }
+}
+

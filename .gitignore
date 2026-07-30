@@ -1,0 +1,8 @@
+#Binary
+k-guard
+
+#Random
+scripts/
+test/
+.env
+bpf/include/vmlinux.h
