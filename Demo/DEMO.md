@@ -5,9 +5,6 @@ detection, and an LSM (`bprm_check_security`) hook for real pre-exec prevention.
 through a few live scenarios, from harmless-looking to actively malicious, showing what
 K-Guard sees and does at each stage.
 
-> **Note:** screenshots referenced below are expected to sit alongside this README (or update
-> the paths below to wherever you place `docs/screenshots/`, etc.).
-
 ---
 
 ## 1. Dashboard overview
@@ -112,7 +109,7 @@ K-Guard matches the rule immediately and sends `SIGKILL`:
 
 | Scenario | Detection path | Response |
 |---|---|---|
-| `/tmp` exec → outbound connect | Tracepoint + correlator | `ALERT` (escalated severity) |
+| `/tmp` exec -> outbound connect | Tracepoint + correlator | `ALERT` (escalated severity) |
 | `nc` (exact-path block rule) | LSM pre-exec hook | `BLOCK` : never executes |
 | `tcpdump` from `/tmp` | Tracepoint (post-exec) | `ALERT` then `KILL` |
 | `xmrig` (any path) | Tracepoint (post-exec) | `KILL` |

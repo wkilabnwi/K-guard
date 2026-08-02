@@ -11,16 +11,30 @@ import (
 	"k-guard/internal/metrics"
 )
 
+func isLoopback(ip net.IP) bool {
+	return ip.IsLoopback()
+}
+
+func isIgnoredComm(comms []string, comm string) bool {
+	for _, c := range comms {
+		if c == comm {
+			return true
+		}
+	}
+	return false
+}
+
 // Router decodes raw ring buffer samples and dispatches them to the Engine
 // Kept separate from Engine itself so decoding concerns (byte layout,
 // event-type dispatch) don't get tangled up with policy concerns
 type Router struct {
 	engine  *Engine
 	metrics *metrics.Registry
+	cfg     *config.Manager
 }
 
-func NewRouter(engine *Engine, m *metrics.Registry) *Router {
-	return &Router{engine: engine, metrics: m}
+func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager) *Router {
+	return &Router{engine: engine, metrics: m, cfg: cfg}
 }
 
 // ProcessRawRecord decodes one ring buffer sample and routes it. Decode
@@ -54,20 +68,47 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, true)
 
 	case kebpf.EventConnect:
-		// Only AF_INET carries a real destination right now, tp_connect in
-		// kguard.c doesn't decode AF_UNIX/AF_INET6 addresses, so those show up
-		// as a CONNECT alert with no destination at all. Docker (and plenty of
-		// other daemons) generate a constant stream of local AF_UNIX socket
-		// connects that drown out real outbound network signal, skip until
-		// there's real decoding/filtering logic for those families.
-		if event.Family != 2 {
+		// Skip known noisy background processes entirely
+		if isIgnoredComm(r.cfg.Current().IgnoredConnectComms, comm) {
 			return
 		}
-		ip := make(net.IP, 4)
-		binary.LittleEndian.PutUint32(ip, event.Daddr)
-		destIP := ip.String()
-		r.engine.AnalyzeConnect(event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, destIP, event.Dport)
 
+		var destIP string
+		destPort := event.Dport
+
+		switch event.Family {
+		case 1: // AF_UNIX
+			path := int8ToString(event.UnixPath[:])
+			if path == "" {
+				// Empty sun_path with no error usually means an abstract socket
+				path = "(anonymous/abstract socket)"
+			}
+			destIP = "unix:" + path
+			destPort = 0
+
+		case 2: // AF_INET
+			ip := make(net.IP, 4)
+			binary.LittleEndian.PutUint32(ip, event.Daddr)
+			// Loopback connects are near-always local tooling
+			// talking to itself so not worth alerting on, will defo change it later
+			if isLoopback(ip) {
+				return
+			}
+			destIP = ip.String()
+
+		case 10: // AF_INET6
+			ip := make(net.IP, 16)
+			copy(ip, event.Daddr6[:])
+			if isLoopback(ip) {
+				return
+			}
+			destIP = "[" + ip.String() + "]"
+
+		default:
+			destIP = fmt.Sprintf("(unknown address family %d)", event.Family)
+		}
+
+		r.engine.AnalyzeConnect(event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, destIP, destPort)
 	case kebpf.EventOpenSensitive:
 		r.engine.AnalyzeGeneric("OPEN_SENSITIVE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "")
 

@@ -59,9 +59,15 @@ compile time.
 
 ## 2. Compile the eBPF object
 
-From the module root:
-
+```bash
+# from the repo root
+go generate ./internal/ebpf/...
 ```
+
+or, equivalently, if you're already inside that directory:
+
+```bash
+cd internal/ebpf
 go generate ./...
 ```
 

@@ -116,6 +116,8 @@ type Config struct {
 	Sinks SinksConfig `json:"sinks"`
 
 	SuspiciousPaths []string `json:"suspicious_path,omitempty"`
+
+	IgnoredConnectComms []string `json:"ignored_connect_comms,omitempty"`
 }
 
 func (c *Config) applyDefaults() {
@@ -146,7 +148,7 @@ func (c *Config) Validate() error {
 }
 
 // BlockedPatterns returns the Pattern of every rule whose Action is
-// ActionBlock and whose Match kind is in-kernel exact-path
+// ActionBlock and whose Match kind is exact-path
 // matching (the LSM hook does exact hash-map lookups on the exec path, so
 // only MatchExactPath pattern makes sense here
 func (c *Config) BlockedPatterns() []string {

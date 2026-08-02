@@ -27,8 +27,11 @@ type BPFKguardEvent struct {
 	Filename    [64]int8
 	Argv0       [64]int8
 	Daddr       uint32
+	Daddr6      [16]uint8
 	Dport       uint16
 	Family      uint16
+	UnixPath    [108]int8
+	_           [4]byte
 }
 
 // LoadBPF returns the embedded CollectionSpec for BPF.

@@ -103,7 +103,7 @@ func main() {
 	}
 
 	engine := processor.NewEngine(cfgMgr, guard, dispatcher, metricsRegistry, mgr)
-	router := processor.NewRouter(engine, metricsRegistry)
+	router := processor.NewRouter(engine, metricsRegistry, cfgMgr)
 
 	quit := make(chan bool)
 	var wg sync.WaitGroup

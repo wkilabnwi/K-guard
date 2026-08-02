@@ -55,6 +55,7 @@
   "protected_pids": [],
   "protected_comms": ["sshd", "systemd", "systemd-journald"],
   "suspicious_path": ["/testkill/", "/tmp/"],
+  "ignored_connect_comms": ["sshd", "docker"],
 
   "enforcement_enabled": true,
   "dedup_window_seconds": 10,

@@ -21,7 +21,7 @@ it, a BPF LSM hook:
 |---|---|---|
 | `EXEC` | `tracepoint/sched/sched_process_exec` (+ `sys_enter_execve` for argv0) | Observed *after* the exec has already started |
 | `EXEC_BLOCKED` | `lsm/bprm_check_security` | Pre-exec : the kernel is stopped from ever running the binary |
-| `CONNECT` | `sys_enter_connect` | Outbound IPv4 connections |
+| `CONNECT` | `sys_enter_connect` | Outbound connections : IPv4, IPv6, and Unix domain sockets |
 | `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
@@ -57,7 +57,7 @@ rule has:
   (synced to the in-kernel LSM block-list when `match` is `exact_path`;
   otherwise falls back to `KILL` post-exec)
 - `suspicious_path_only` (optional): only evaluate the rule if the exec
-  path is under `/tmp/`, `/dev/shm/`, or `/var/tmp/`
+  path matches one of the configured `suspicious_paths`
 
 An `allowlist` of exact paths/basenames is checked first and skips rule
 evaluation entirely. `protected_pids` / `protected_comms`, plus PID 1 and
@@ -71,6 +71,8 @@ Example config:
   "dedup_window_seconds": 10,
   "allowlist": ["/usr/bin/ssh"],
   "protected_comms": ["sshd", "systemd"],
+  "suspicious_path": ["/testkill/", "/tmp/"],
+  "ignored_connect_comms": ["docker"],
   "rules": [
     { "name": "block-netcat", "match": "basename", "pattern": "nc", "severity": "critical", "action": "BLOCK" },
     { "name": "tmp-exec", "match": "prefix", "pattern": "/tmp/", "severity": "high", "action": "KILL", "suspicious_path_only": true },
@@ -92,10 +94,15 @@ or `(event_type, pid)` for the generic sensors) within
 `dedup_window_seconds` are suppressed after the first.
 
 A small correlator remembers, per-PID, the most recent exec and whether
-it came from a suspicious path (`/tmp`, `/dev/shm`, `/var/tmp`). If a
+it came from a configured suspicious path (see `suspicious_paths` above). If a
 `CONNECT` event follows shortly after, its severity is escalated from
 `low` to `high` and the alert notes the correlated exec, a decent
 signal for "downloaded to /tmp and immediately phoned home."
+
+Outbound connects from processes listed in `ignored_connect_comms`
+(e.g. `["sshd"]`) are filtered before reaching the engine at all, as are
+any loopback destinations (`127.0.0.0/8`, `::1`), both are near-always
+background/tunnel noise rather than signal worth alerting on.
 
 ## Alert sinks
 
