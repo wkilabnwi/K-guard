@@ -118,6 +118,8 @@ type Config struct {
 	SuspiciousPaths []string `json:"suspicious_path,omitempty"`
 
 	IgnoredConnectComms []string `json:"ignored_connect_comms,omitempty"`
+
+	SensitiveWritePaths []string `json:"sensitive_write_paths,omitempty"`
 }
 
 func (c *Config) applyDefaults() {

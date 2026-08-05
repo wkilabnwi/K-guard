@@ -191,6 +191,22 @@ func (m *Manager) SyncSuspiciousPaths(paths []string) error {
 	return nil
 }
 
+func (m *Manager) SyncSensitiveWritePaths(paths []string) error {
+	sm := m.Objects.SensitiveWritePaths
+	if sm == nil {
+		return nil
+	}
+	for _, p := range paths {
+		var k [64]byte
+		copy(k[:], p)
+		val := uint8(1)
+		if err := sm.Update(k, val, ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("updating sensitive_write_paths: %w", err)
+		}
+	}
+	return nil
+}
+
 func (m *Manager) Close() {
 	if m.Reader != nil {
 		m.Reader.Close()

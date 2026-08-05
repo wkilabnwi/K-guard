@@ -38,7 +38,11 @@
 #define EVT_SETUID        6  // setuid()/privilege change 
 #define EVT_MODULE_LOAD   7  // init_module()/finit_module() 
 #define EVT_MEMFD         8  // memfd_create(), fileless-exec precursor 
-#define EVT_WRITE 9 
+#define EVT_SENSITIVE_WRITE 9 // reserved for write events
+
+#define O_ACCMODE_MASK 0x0003
+#define O_WRONLY_ 0x0001
+#define O_RDWR_   0x0002
 
 struct kguard_event {
     __u64 timestamp_ns;
@@ -82,7 +86,7 @@ struct {
     __type(value, __u8);
 } blocked_paths SEC(".maps");
 
-// userspace sets this to 1 to disable ALL LSM enforcement
+// userspace sets this to 1 to disable all LSM enforcement
 // instantly (example if it's misbehaving or false-positiving in production)
 // without needing to detach/reload programs, Detect-only mode still runs. 
 struct {
@@ -98,6 +102,13 @@ struct {
     __type(key, char[64]);
     __type(value, __u8);
 } suspicious_paths SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, char[64]);
+    __type(value, __u8);
+} sensitive_write_paths SEC(".maps");
 
 // Helpers
 
@@ -324,17 +335,27 @@ struct syscall_openat_args {
     unsigned short mode;
 };
 
-static __always_inline int is_suspicious_path_ebpf(const char *path) {
-    char key[64] = {0};
-    bpf_probe_read_kernel_str(key, sizeof(key), path);
+static __always_inline int path_in_map(const char *path, void *map) {
+    char full[64] = {0};
+    bpf_probe_read_kernel_str(full, sizeof(full), path);
 
-    __u8 *found = bpf_map_lookup_elem(&suspicious_paths, key);
+    __u8 *found = bpf_map_lookup_elem(map, full);
     if (found && *found == 1) return 1;
 
+// I will leave my first implementation of this loop, just to rmemeber how dumb i was
+//     for (int len = 62; len > 1; len--) {
+//         if (key[len] == '/') {
+//             key[len + 1] = '\0';
+//             found = bpf_map_lookup_elem(map, key);
+//             if (found && *found == 1) return 1;
+//         }
+
+    #pragma unroll
     for (int len = 62; len > 1; len--) {
-        if (key[len] == '/') {
-            key[len + 1] = '\0';
-            found = bpf_map_lookup_elem(&suspicious_paths, key);
+        if (full[len] == '/') {
+            char key[64] = {0};
+            __builtin_memcpy(key, full, len + 1); 
+            found = bpf_map_lookup_elem(map, key);
             if (found && *found == 1) return 1;
         }
     }
@@ -347,19 +368,38 @@ int tp_openat(struct syscall_openat_args *ctx) {
     int n = bpf_probe_read_user_str(&path, sizeof(path), ctx->filename);
     if (n <= 0) return 0;
 
-    if (!is_suspicious_path_ebpf(path)) {
-        return 0;
+    int write_intent = (ctx->flags & O_ACCMODE_MASK) == O_WRONLY_ ||
+                        (ctx->flags & O_ACCMODE_MASK) == O_RDWR_;
+
+    if (write_intent && path_in_map(path, &sensitive_write_paths)) {
+        struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+        if (e) {
+            fill_common(e, EVT_SENSITIVE_WRITE);
+            __builtin_memcpy(e->filename, path, sizeof(path));
+            e->ret = ctx->flags; // stash raw flags for userspace to decode
+            bpf_ringbuf_submit(e, 0);
+        }
     }
 
-    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) return 0;
-    fill_common(e, EVT_OPEN_SENSITIVE);
-    __builtin_memcpy(e->filename, path, sizeof(path));
-    bpf_ringbuf_submit(e, 0);
+    if (!path_in_map(path, &suspicious_paths)) {
+        return 0;
+    }
+    struct kguard_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
+    if (!e2) return 0;
+    fill_common(e2, EVT_OPEN_SENSITIVE);
+    __builtin_memcpy(e2->filename, path, sizeof(path));
+    bpf_ringbuf_submit(e2, 0);
     return 0;
 }
 
 // openat2() sensor
+
+struct open_how_min {
+    __u64 flags;
+    __u64 mode;
+    __u64 resolve;
+};
+
 
 struct syscall_openat2_args {
     unsigned long long common_tp_fields;
@@ -376,15 +416,33 @@ int tp_openat2(struct syscall_openat2_args *ctx) {
     int n = bpf_probe_read_user_str(&path, sizeof(path), ctx->filename);
     if (n <= 0) return 0;
 
-    if (!is_suspicious_path_ebpf(path)) {
-        return 0;
+    struct open_how_min how = {0};
+    __u64 flags = 0;
+    if (bpf_probe_read_user(&how, sizeof(how), ctx->how) == 0) {
+        flags = how.flags;
     }
 
-    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) return 0;
-    fill_common(e, EVT_OPEN_SENSITIVE);
-    __builtin_memcpy(e->filename, path, sizeof(path));
-    bpf_ringbuf_submit(e, 0);
+    int write_intent = (flags & O_ACCMODE_MASK) == O_WRONLY_ ||
+                        (flags & O_ACCMODE_MASK) == O_RDWR_;
+
+    if (write_intent && path_in_map(path, &sensitive_write_paths)) {
+        struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+        if (e) {
+            fill_common(e, EVT_SENSITIVE_WRITE);
+            __builtin_memcpy(e->filename, path, sizeof(path));
+            e->ret = (__s32)flags;
+            bpf_ringbuf_submit(e, 0);
+        }
+    }
+
+    if (!path_in_map(path, &suspicious_paths)) {
+        return 0;
+    }
+    struct kguard_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
+    if (!e2) return 0;
+    fill_common(e2, EVT_OPEN_SENSITIVE);
+    __builtin_memcpy(e2->filename, path, sizeof(path));
+    bpf_ringbuf_submit(e2, 0);
     return 0;
 }
 
@@ -474,30 +532,5 @@ struct syscall_write_args {
     const char *buf;
     unsigned long count;
 };
-
-SEC("tracepoint/syscalls/sys_enter_write")
-int tp_enter_write(struct syscall_write_args *ctx) {
-    // Ignore stdout/stderr
-    if (ctx->fd == 1 || ctx->fd == 2) {
-        return 0;
-    }
-
-    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) return 0;
-
-    fill_common(e, EVT_WRITE);
-
-    e->write_fd = (__u32)ctx->fd;
-    e->write_count = (__u64)ctx->count;
-
-    // Zero memory for the payload preview
-    __builtin_memset(e->write_buf, 0, sizeof(e->write_buf));
-
-    // Safely copy payload string preview from user space
-    bpf_probe_read_user_str(&e->write_buf, sizeof(e->write_buf), ctx->buf);
-
-    bpf_ringbuf_submit(e, 0);
-    return 0;
-}
 
 char _license[] SEC("license") = "GPL";

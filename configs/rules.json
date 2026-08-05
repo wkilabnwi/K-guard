@@ -56,6 +56,7 @@
   "protected_comms": ["sshd", "systemd", "systemd-journald"],
   "suspicious_path": ["/testkill/", "/tmp/"],
   "ignored_connect_comms": ["sshd", "docker"],
+  "sensitive_write_paths": ["/tmp/"],
 
   "enforcement_enabled": true,
   "dedup_window_seconds": 10,
@@ -65,7 +66,7 @@
     "syslog": false,
     "webhook_url": "",
     "store_path": "/var/lib/kguard/",
-    "metrics_listen_addr": ":9090",
+    "metrics_listen_addr": "127.0.0.1:9090",
     "dashboard_listen_addr": ":8080"
   }
 }

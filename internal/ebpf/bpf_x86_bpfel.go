@@ -79,7 +79,6 @@ type BPFSpecs struct {
 type BPFProgramSpecs struct {
 	LsmBprmCheck  *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
 	TpConnect     *ebpf.ProgramSpec `ebpf:"tp_connect"`
-	TpEnterWrite  *ebpf.ProgramSpec `ebpf:"tp_enter_write"`
 	TpExecve      *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule  *ebpf.ProgramSpec `ebpf:"tp_init_module"`
 	TpMemfdCreate *ebpf.ProgramSpec `ebpf:"tp_memfd_create"`
@@ -94,11 +93,12 @@ type BPFProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFMapSpecs struct {
-	BlockedPaths       *ebpf.MapSpec `ebpf:"blocked_paths"`
-	EnforcementEnabled *ebpf.MapSpec `ebpf:"enforcement_enabled"`
-	ExecScratchMap     *ebpf.MapSpec `ebpf:"exec_scratch_map"`
-	Rb                 *ebpf.MapSpec `ebpf:"rb"`
-	SuspiciousPaths    *ebpf.MapSpec `ebpf:"suspicious_paths"`
+	BlockedPaths        *ebpf.MapSpec `ebpf:"blocked_paths"`
+	EnforcementEnabled  *ebpf.MapSpec `ebpf:"enforcement_enabled"`
+	ExecScratchMap      *ebpf.MapSpec `ebpf:"exec_scratch_map"`
+	Rb                  *ebpf.MapSpec `ebpf:"rb"`
+	SensitiveWritePaths *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
+	SuspiciousPaths     *ebpf.MapSpec `ebpf:"suspicious_paths"`
 }
 
 // BPFObjects contains all objects after they have been loaded into the kernel.
@@ -120,11 +120,12 @@ func (o *BPFObjects) Close() error {
 //
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFMaps struct {
-	BlockedPaths       *ebpf.Map `ebpf:"blocked_paths"`
-	EnforcementEnabled *ebpf.Map `ebpf:"enforcement_enabled"`
-	ExecScratchMap     *ebpf.Map `ebpf:"exec_scratch_map"`
-	Rb                 *ebpf.Map `ebpf:"rb"`
-	SuspiciousPaths    *ebpf.Map `ebpf:"suspicious_paths"`
+	BlockedPaths        *ebpf.Map `ebpf:"blocked_paths"`
+	EnforcementEnabled  *ebpf.Map `ebpf:"enforcement_enabled"`
+	ExecScratchMap      *ebpf.Map `ebpf:"exec_scratch_map"`
+	Rb                  *ebpf.Map `ebpf:"rb"`
+	SensitiveWritePaths *ebpf.Map `ebpf:"sensitive_write_paths"`
+	SuspiciousPaths     *ebpf.Map `ebpf:"suspicious_paths"`
 }
 
 func (m *BPFMaps) Close() error {
@@ -133,6 +134,7 @@ func (m *BPFMaps) Close() error {
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
 		m.Rb,
+		m.SensitiveWritePaths,
 		m.SuspiciousPaths,
 	)
 }
@@ -143,7 +145,6 @@ func (m *BPFMaps) Close() error {
 type BPFPrograms struct {
 	LsmBprmCheck  *ebpf.Program `ebpf:"lsm_bprm_check"`
 	TpConnect     *ebpf.Program `ebpf:"tp_connect"`
-	TpEnterWrite  *ebpf.Program `ebpf:"tp_enter_write"`
 	TpExecve      *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule  *ebpf.Program `ebpf:"tp_init_module"`
 	TpMemfdCreate *ebpf.Program `ebpf:"tp_memfd_create"`
@@ -158,7 +159,6 @@ func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.LsmBprmCheck,
 		p.TpConnect,
-		p.TpEnterWrite,
 		p.TpExecve,
 		p.TpInitModule,
 		p.TpMemfdCreate,

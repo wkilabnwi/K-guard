@@ -23,6 +23,7 @@ it, a BPF LSM hook:
 | `EXEC_BLOCKED` | `lsm/bprm_check_security` | Pre-exec : the kernel is stopped from ever running the binary |
 | `CONNECT` | `sys_enter_connect` | Outbound connections : IPv4, IPv6, and Unix domain sockets |
 | `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
+| `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
@@ -73,6 +74,7 @@ Example config:
   "protected_comms": ["sshd", "systemd"],
   "suspicious_path": ["/testkill/", "/tmp/"],
   "ignored_connect_comms": ["docker"],
+  "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
   "rules": [
     { "name": "block-netcat", "match": "basename", "pattern": "nc", "severity": "critical", "action": "BLOCK" },
     { "name": "tmp-exec", "match": "prefix", "pattern": "/tmp/", "severity": "high", "action": "KILL", "suspicious_path_only": true },
@@ -103,6 +105,15 @@ Outbound connects from processes listed in `ignored_connect_comms`
 (e.g. `["sshd"]`) are filtered before reaching the engine at all, as are
 any loopback destinations (`127.0.0.0/8`, `::1`), both are near-always
 background/tunnel noise rather than signal worth alerting on.
+
+`sensitive_write_paths` are matched independently of the rule list: any
+`openat`/`openat2` call with write intent (`O_WRONLY` or `O_RDWR`) whose
+target falls under one of these paths raises a `SENSITIVE_WRITE` alert
+at `critical` severity, regardless of whether the path also appears in
+`suspicious_paths` or matches any rule. Path matching checks the exact
+path first, then walks up the directory tree looking for a configured
+prefix (so `/etc/` in the list covers `/etc/shadow`, `/etc/cron.d/foo`,
+etc.).
 
 ## Alert sinks
 

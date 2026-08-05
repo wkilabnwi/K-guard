@@ -56,6 +56,9 @@ func (e *Engine) applyConfig(c *config.Config) {
 	if err := e.ebpfMgr.SyncSuspiciousPaths(c.SuspiciousPaths); err != nil {
 		log.Printf("[engine] failed to sync Suspicious Paths: %v", err)
 	}
+	if err := e.ebpfMgr.SyncSensitiveWritePaths(c.SensitiveWritePaths); err != nil {
+		log.Printf("[engine] failed to sync Suspicious write Paths: %v", err)
+	}
 	wantEnforcement := c.EnforcementEnabled && e.ebpfMgr.LSMEnabled
 	if c.EnforcementEnabled && !e.ebpfMgr.LSMEnabled {
 		log.Printf("[engine] config requests enforcement_enabled=true, but the LSM hook is not active on this kernel/build, staying in detect-only mode. See bpf/include/README.md.")

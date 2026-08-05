@@ -125,6 +125,11 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 	case kebpf.EventMemfd:
 		r.engine.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "")
+
+	case kebpf.EventSensitiveWrite:
+		r.engine.AnalyzeGeneric("SENSITIVE_WRITE", config.SeverityCritical,
+			event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId,
+			filename, fmt.Sprintf("open flags=0x%x (write intent on protected path)", event.Ret))
 	}
 }
 
