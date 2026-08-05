@@ -153,7 +153,7 @@ the kernel for an unrelated process can't be killed by mistake.
 ## Running
 
 ```
-./k-guard -config /config/rules.json
+sudo ./k-guard -config /config/rules.json
 ```
 
 Send `SIGHUP` to force an immediate config reload; `SIGINT`/`SIGTERM`
