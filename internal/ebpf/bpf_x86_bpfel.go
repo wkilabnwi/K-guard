@@ -31,7 +31,9 @@ type BPFKguardEvent struct {
 	Dport       uint16
 	Family      uint16
 	UnixPath    [108]int8
-	_           [4]byte
+	WriteFd     uint32
+	WriteCount  uint64
+	WriteBuf    [64]int8
 }
 
 // LoadBPF returns the embedded CollectionSpec for BPF.
@@ -77,6 +79,7 @@ type BPFSpecs struct {
 type BPFProgramSpecs struct {
 	LsmBprmCheck  *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
 	TpConnect     *ebpf.ProgramSpec `ebpf:"tp_connect"`
+	TpEnterWrite  *ebpf.ProgramSpec `ebpf:"tp_enter_write"`
 	TpExecve      *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule  *ebpf.ProgramSpec `ebpf:"tp_init_module"`
 	TpMemfdCreate *ebpf.ProgramSpec `ebpf:"tp_memfd_create"`
@@ -95,6 +98,7 @@ type BPFMapSpecs struct {
 	EnforcementEnabled *ebpf.MapSpec `ebpf:"enforcement_enabled"`
 	ExecScratchMap     *ebpf.MapSpec `ebpf:"exec_scratch_map"`
 	Rb                 *ebpf.MapSpec `ebpf:"rb"`
+	SuspiciousPaths    *ebpf.MapSpec `ebpf:"suspicious_paths"`
 }
 
 // BPFObjects contains all objects after they have been loaded into the kernel.
@@ -120,6 +124,7 @@ type BPFMaps struct {
 	EnforcementEnabled *ebpf.Map `ebpf:"enforcement_enabled"`
 	ExecScratchMap     *ebpf.Map `ebpf:"exec_scratch_map"`
 	Rb                 *ebpf.Map `ebpf:"rb"`
+	SuspiciousPaths    *ebpf.Map `ebpf:"suspicious_paths"`
 }
 
 func (m *BPFMaps) Close() error {
@@ -128,6 +133,7 @@ func (m *BPFMaps) Close() error {
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
 		m.Rb,
+		m.SuspiciousPaths,
 	)
 }
 
@@ -137,6 +143,7 @@ func (m *BPFMaps) Close() error {
 type BPFPrograms struct {
 	LsmBprmCheck  *ebpf.Program `ebpf:"lsm_bprm_check"`
 	TpConnect     *ebpf.Program `ebpf:"tp_connect"`
+	TpEnterWrite  *ebpf.Program `ebpf:"tp_enter_write"`
 	TpExecve      *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule  *ebpf.Program `ebpf:"tp_init_module"`
 	TpMemfdCreate *ebpf.Program `ebpf:"tp_memfd_create"`
@@ -151,6 +158,7 @@ func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.LsmBprmCheck,
 		p.TpConnect,
+		p.TpEnterWrite,
 		p.TpExecve,
 		p.TpInitModule,
 		p.TpMemfdCreate,

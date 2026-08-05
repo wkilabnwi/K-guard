@@ -38,6 +38,7 @@
 #define EVT_SETUID        6  // setuid()/privilege change 
 #define EVT_MODULE_LOAD   7  // init_module()/finit_module() 
 #define EVT_MEMFD         8  // memfd_create(), fileless-exec precursor 
+#define EVT_WRITE 9 
 
 struct kguard_event {
     __u64 timestamp_ns;
@@ -47,16 +48,20 @@ struct kguard_event {
     __u32 gid;
     __u64 cgroup_id;
     __u32 event_type;
-    __s32 ret;       // syscall/LSM decision: 0 = allowed, negative = denied 
+    __s32 ret;       
     char comm[16];
     char filename[64];
-    char argv0[64];  // first argv entry
+    char argv0[64];  
     
-        __u32 daddr;     // IPv4 dest addr, network byte order, AF_INET fam only
-    __u8  daddr6[16];// IPv6 dest addr, network byte order, AF_INET6 fam only
-    __u16 dport;     // dest port, host byte order, INET/INET6 only, 0 for AF_UNIX
-    __u16 family;    // AF_UNIX(1), AF_INET(2), AF_INET6(10), 0 if never set
-    char  unix_path[108]; // AF_UNIX peer path (sun_path max length), AF_UNIX only
+    __u32 daddr;     
+    __u8  daddr6[16];
+    __u16 dport;     
+    __u16 family;    
+    char  unix_path[108]; 
+
+    __u32 write_fd;
+    __u64 write_count;
+    char  write_buf[64]; // Preview payload
 };
 
 struct kguard_event *unused __attribute__((unused));
@@ -69,7 +74,7 @@ struct {
 
 // Populated from userspace (config.go) with binaries/paths that should be
 // hard-blocked at exec time by the LSM hook, Key = null-terminated path
-// value = 1 (block). 
+// value = 1 (block)
 struct {
     __uint(type, 1); // BPF_MAP_TYPE_HASH 
     __uint(max_entries, 1024);
@@ -86,6 +91,13 @@ struct {
     __type(key, __u32);
     __type(value, __u8);
 } enforcement_enabled SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, char[64]);
+    __type(value, __u8);
+} suspicious_paths SEC(".maps");
 
 // Helpers
 
@@ -312,14 +324,20 @@ struct syscall_openat_args {
     unsigned short mode;
 };
 
-static __always_inline int has_sensitive_prefix(const char *path) {
-    char buf[16] = {0};
-    __builtin_memcpy(buf, path, 12);
+static __always_inline int is_suspicious_path_ebpf(const char *path) {
+    char key[64] = {0};
+    bpf_probe_read_kernel_str(key, sizeof(key), path);
 
-    if (__builtin_memcmp(buf, "/etc/passwd", 11) == 0) return 1;
-    if (__builtin_memcmp(buf, "/etc/shadow", 11) == 0) return 1;
-    if (__builtin_memcmp(buf, "/etc/sudo", 9) == 0) return 1;
-    if (__builtin_memcmp(buf, "/root/.ssh", 10) == 0) return 1;
+    __u8 *found = bpf_map_lookup_elem(&suspicious_paths, key);
+    if (found && *found == 1) return 1;
+
+    for (int len = 62; len > 1; len--) {
+        if (key[len] == '/') {
+            key[len + 1] = '\0';
+            found = bpf_map_lookup_elem(&suspicious_paths, key);
+            if (found && *found == 1) return 1;
+        }
+    }
     return 0;
 }
 
@@ -329,7 +347,7 @@ int tp_openat(struct syscall_openat_args *ctx) {
     int n = bpf_probe_read_user_str(&path, sizeof(path), ctx->filename);
     if (n <= 0) return 0;
 
-    if (!has_sensitive_prefix(path)) {
+    if (!is_suspicious_path_ebpf(path)) {
         return 0;
     }
 
@@ -358,7 +376,7 @@ int tp_openat2(struct syscall_openat2_args *ctx) {
     int n = bpf_probe_read_user_str(&path, sizeof(path), ctx->filename);
     if (n <= 0) return 0;
 
-    if (!has_sensitive_prefix(path)) {
+    if (!is_suspicious_path_ebpf(path)) {
         return 0;
     }
 
@@ -444,6 +462,40 @@ int tp_memfd_create(struct syscall_memfd_create_args *ctx) {
     if (!e) return 0;
     fill_common(e, EVT_MEMFD);
     bpf_probe_read_user_str(&e->filename, sizeof(e->filename), ctx->uname);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+struct syscall_write_args {
+    unsigned long long common_tp_fields;
+    int __syscall_nr;
+    int __pad;
+    unsigned long fd;
+    const char *buf;
+    unsigned long count;
+};
+
+SEC("tracepoint/syscalls/sys_enter_write")
+int tp_enter_write(struct syscall_write_args *ctx) {
+    // Ignore stdout/stderr
+    if (ctx->fd == 1 || ctx->fd == 2) {
+        return 0;
+    }
+
+    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return 0;
+
+    fill_common(e, EVT_WRITE);
+
+    e->write_fd = (__u32)ctx->fd;
+    e->write_count = (__u64)ctx->count;
+
+    // Zero memory for the payload preview
+    __builtin_memset(e->write_buf, 0, sizeof(e->write_buf));
+
+    // Safely copy payload string preview from user space
+    bpf_probe_read_user_str(&e->write_buf, sizeof(e->write_buf), ctx->buf);
+
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
