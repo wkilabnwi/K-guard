@@ -12,7 +12,7 @@ K-Guard sees and does at each stage.
 The built-in web dashboard (`sinks.dashboard_listen_addr` in config) shows live sensor status,
 whether LSM enforcement is active, and a scrollable history of every alert K-Guard has fired.
 
-![K-Guard dashboard](UI_Web.png)
+![K-Guard dashboard](docs/UI_Web.png)
 
 Enforcement is `ACTIVE` here : the LSM pre-exec block hook attached successfully, so K-Guard
 isn't just detecting-and-killing, it's actually preventing execution for anything on the
@@ -32,13 +32,13 @@ chmod +x /tmp/python3-runner
 /tmp/python3-runner /tmp/conn_test.py   # connects out to 1.1.1.1:80
 ```
 
-![Setting up the suspicious-path exec + connect](Correlation_cmds.png)
+![Setting up the suspicious-path exec + connect](docs/Correlation_cmds.png)
 
 K-Guard's correlator (`internal/processor/correlate.go`) remembers that this PID exec'd from a
 suspicious path, and when the same PID opens a connection shortly after, escalates the alert
 from `low` to `high` severity automatically:
 
-![Correlated alert: exec from /tmp followed by outbound connect](Correlation_Alert.png)
+![Correlated alert: exec from /tmp followed by outbound connect](docs/Correlation_Alert.png)
 
 ---
 
@@ -51,12 +51,12 @@ where the exact path is on K-Guard's LSM block-list.
 sudo /usr/bin/nc -l -p 4444
 ```
 
-![Attempting to run nc](nc_cmd.png)
+![Attempting to run nc](docs/nc_cmd.png)
 
 Because `/usr/bin/nc` is synced into the in-kernel `blocked_paths` map, the LSM hook denies the
 `execve()` outright, the binary never runs at all, not even for a moment:
 
-![nc blocked pre-flight by the LSM hook](nc_kill.png)
+![nc blocked pre-flight by the LSM hook](docs/nc_kill.png)
 
 Note the alert type: `EXEC_BLOCKED`, not `KILL`, there's no process to kill, since it was never
 allowed to start.
@@ -75,13 +75,13 @@ cp "$(which tcpdump)" /tmp/tools/tcpdump
 sudo /tmp/tools/tcpdump -i lo -c 1
 ```
 
-![Copying and running tcpdump from /tmp](tcpdump_cmds.png)
+![Copying and running tcpdump from /tmp](docs/tcpdump_cmds.png)
 
 K-Guard fires two alerts here: first a medium-severity `ALERT` for running a raw-socket tool
 outside the allowlist, then a high-severity `KILL` for executing from a suspicious path and
 the process is terminated (`Killed`, visible in the shell output above):
 
-![tcpdump alerted and killed](tcpdump_Alert_KATF.png)
+![tcpdump alerted and killed](docs/tcpdump_Alert_KATF.png)
 
 ---
 
@@ -97,11 +97,11 @@ chmod +x /tmp/xmrig
 /tmp/xmrig 30 &
 ```
 
-![Launching a binary named xmrig](xmrig_cmd.png)
+![Launching a binary named xmrig](docs/xmrig_cmd.png)
 
 K-Guard matches the rule immediately and sends `SIGKILL`:
 
-![xmrig detected and terminated](xmrig_KATF.png)
+![xmrig detected and terminated](docs/xmrig_KATF.png)
 
 ---
 
