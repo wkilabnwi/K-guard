@@ -34,6 +34,10 @@ type Alert struct {
 	DestIP   string `json:"dest_ip,omitempty"`
 	DestPort uint16 `json:"dest_port,omitempty"`
 
+	// Lineage fields
+	AncestorSuspicious bool   `json:"ancestor_suspicious,omitempty"`
+	AncestorFilename   string `json:"ancestor_filename,omitempty"`
+
 	// Free form extra detail
 	Detail string `json:"detail,omitempty"`
 

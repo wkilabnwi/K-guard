@@ -115,7 +115,7 @@ func isAllowlisted(cfg *config.Config, filename string) bool {
 // prevented pre-flight by the LSM hook (EVT_EXEC_BLOCKED), in that case no
 // KILL is attempted (there is no process to kill; it never ran), but a
 // BLOCK-severity alert is still produced.
-func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, argv0 string, blocked bool) {
+func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, argv0 string, blocked bool, ancestorSuspicious bool, ancestorFilename string) {
 	cfg := e.cfg.Current()
 	h := &execHash{pid: pid}
 
@@ -132,6 +132,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			Timestamp: time.Now(), Severity: string(config.SeverityCritical), Action: string(config.ActionBlock),
 			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
 			CgroupID: cgroupID, Filename: filename, Argv0: argv0,
+			AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 		})
 		return
 	}
@@ -158,7 +159,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		a := alert.Alert{
 			Timestamp: time.Now(), RuleName: r.Name, Severity: string(r.Severity), Action: string(r.Action),
 			EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-			Filename: filename, Argv0: argv0,
+			Filename: filename, Argv0: argv0, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 		}
 
 		switch r.Action {
@@ -179,10 +180,9 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 	}
 }
 
-// AnalyzeConnect handles CONNECT sensor events, always alerted at low
-// severity on its own, escalated to high/critical if correlated with a
-// recent suspicious path exec on the same PID
-func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, destIP string, destPort uint16) {
+// AnalyzeConnect handles CONNECT sensor events, escalating to CRITICAL
+// when kernel lineage marks the process as originating from a suspicious binary.
+func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, destIP string, destPort uint16, ancestorSuspicious bool, ancestorFilename string) {
 	if !e.dedup.Allow("connect|" + strconv.Itoa(int(pid)) + "|" + destIP) {
 		return
 	}
@@ -190,30 +190,49 @@ func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupI
 	sev := config.SeverityLow
 	detail := ""
 
-	// The correlator logic works on seeing if the connect requested is associated
-	// with a suspicious Exec command, it escalated the severity if so, see correlate.go for more details
-	if suspicious, execFile := e.correlator.CorrelateConnect(pid); suspicious {
-		sev = config.SeverityHigh
-		detail = "correlated with recent suspicious path exec: " + execFile
+	// Check kernel-emitted lineage
+	if ancestorSuspicious {
+		sev = config.SeverityCritical
+		if comm == filepath.Base(ancestorFilename) {
+			detail = "forked process with suspicious ancestor: " + ancestorFilename
+
+		} else {
+			detail = "suspicious ancestor: " + ancestorFilename
+		}
 	}
 
 	e.dispatcher.Dispatch(alert.Alert{
 		Timestamp: time.Now(), Severity: string(sev), Action: string(config.ActionAlert),
 		EventType: "CONNECT", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		DestIP: destIP, DestPort: destPort, Detail: detail,
+		DestIP: destIP, DestPort: destPort, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 	})
 }
 
 // AnalyzeGeneric handles every other sensor type with a shared, simple severity
 // default. each is still its own distinct EventType in the alert so sinks
 // and the dashboard can filter them independently.
-func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severity, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, filename, detail string) {
+func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severity, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, filename, detail string, ancestorSuspicious bool, ancestorFilename string) {
 	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid))) {
 		return
 	}
+
+	sev := defaultSeverity
+	if ancestorSuspicious {
+		sev = config.SeverityCritical
+		if detail != "" {
+			detail += " | "
+		}
+		if filename != "" && filename == ancestorFilename {
+			detail += "forked process with suspicious ancestor: " + ancestorFilename
+
+		} else {
+			detail += "suspicious ancestor: " + ancestorFilename
+		}
+	}
+
 	e.dispatcher.Dispatch(alert.Alert{
-		Timestamp: time.Now(), Severity: string(defaultSeverity), Action: string(config.ActionAlert),
+		Timestamp: time.Now(), Severity: string(sev), Action: string(config.ActionAlert),
 		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		Filename: filename, Detail: detail,
+		Filename: filename, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 	})
 }

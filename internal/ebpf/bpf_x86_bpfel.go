@@ -15,25 +15,35 @@ import (
 type BPFExecScratch struct{ Argv0 [64]int8 }
 
 type BPFKguardEvent struct {
-	TimestampNs uint64
-	Pid         uint32
-	Ppid        uint32
-	Uid         uint32
-	Gid         uint32
-	CgroupId    uint64
-	EventType   uint32
-	Ret         int32
-	Comm        [16]int8
-	Filename    [64]int8
-	Argv0       [64]int8
-	Daddr       uint32
-	Daddr6      [16]uint8
-	Dport       uint16
-	Family      uint16
-	UnixPath    [108]int8
-	WriteFd     uint32
-	WriteCount  uint64
-	WriteBuf    [64]int8
+	TimestampNs        uint64
+	Pid                uint32
+	Ppid               uint32
+	Uid                uint32
+	Gid                uint32
+	CgroupId           uint64
+	EventType          uint32
+	Ret                int32
+	Comm               [16]int8
+	Filename           [64]int8
+	Argv0              [64]int8
+	Daddr              uint32
+	Daddr6             [16]uint8
+	Dport              uint16
+	Family             uint16
+	UnixPath           [108]int8
+	WriteFd            uint32
+	WriteCount         uint64
+	WriteBuf           [64]int8
+	AncestorSuspicious uint8
+	AncestorFilename   [64]int8
+	_                  [7]byte
+}
+
+type BPFProcessLineage struct {
+	ParentPid          uint32
+	SuspiciousAncestor uint8
+	AncestorFilename   [64]int8
+	_                  [3]byte
 }
 
 // LoadBPF returns the embedded CollectionSpec for BPF.
@@ -86,6 +96,7 @@ type BPFProgramSpecs struct {
 	TpOpenat2     *ebpf.ProgramSpec `ebpf:"tp_openat2"`
 	TpPtrace      *ebpf.ProgramSpec `ebpf:"tp_ptrace"`
 	TpSchedexec   *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
+	TpSchedfork   *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
 	TpSetuid      *ebpf.ProgramSpec `ebpf:"tp_setuid"`
 }
 
@@ -96,6 +107,7 @@ type BPFMapSpecs struct {
 	BlockedPaths        *ebpf.MapSpec `ebpf:"blocked_paths"`
 	EnforcementEnabled  *ebpf.MapSpec `ebpf:"enforcement_enabled"`
 	ExecScratchMap      *ebpf.MapSpec `ebpf:"exec_scratch_map"`
+	LineageMap          *ebpf.MapSpec `ebpf:"lineage_map"`
 	Rb                  *ebpf.MapSpec `ebpf:"rb"`
 	SensitiveWritePaths *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
 	SuspiciousPaths     *ebpf.MapSpec `ebpf:"suspicious_paths"`
@@ -123,6 +135,7 @@ type BPFMaps struct {
 	BlockedPaths        *ebpf.Map `ebpf:"blocked_paths"`
 	EnforcementEnabled  *ebpf.Map `ebpf:"enforcement_enabled"`
 	ExecScratchMap      *ebpf.Map `ebpf:"exec_scratch_map"`
+	LineageMap          *ebpf.Map `ebpf:"lineage_map"`
 	Rb                  *ebpf.Map `ebpf:"rb"`
 	SensitiveWritePaths *ebpf.Map `ebpf:"sensitive_write_paths"`
 	SuspiciousPaths     *ebpf.Map `ebpf:"suspicious_paths"`
@@ -133,6 +146,7 @@ func (m *BPFMaps) Close() error {
 		m.BlockedPaths,
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
+		m.LineageMap,
 		m.Rb,
 		m.SensitiveWritePaths,
 		m.SuspiciousPaths,
@@ -152,6 +166,7 @@ type BPFPrograms struct {
 	TpOpenat2     *ebpf.Program `ebpf:"tp_openat2"`
 	TpPtrace      *ebpf.Program `ebpf:"tp_ptrace"`
 	TpSchedexec   *ebpf.Program `ebpf:"tp_schedexec"`
+	TpSchedfork   *ebpf.Program `ebpf:"tp_schedfork"`
 	TpSetuid      *ebpf.Program `ebpf:"tp_setuid"`
 }
 
@@ -166,6 +181,7 @@ func (p *BPFPrograms) Close() error {
 		p.TpOpenat2,
 		p.TpPtrace,
 		p.TpSchedexec,
+		p.TpSchedfork,
 		p.TpSetuid,
 	)
 }

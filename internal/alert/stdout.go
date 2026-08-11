@@ -9,7 +9,7 @@ func (StdoutSink) Name() string { return "stdout" }
 
 func (StdoutSink) Send(a Alert) {
 	tag := "AUDIT"
-	if a.RuleName != "" {
+	if a.RuleName != "" || a.AncestorSuspicious {
 		tag = "SECURITY"
 	}
 
@@ -18,6 +18,11 @@ func (StdoutSink) Send(a Alert) {
 	fmt.Printf("   | Comm: %-16s PID: %-8d PPID: %-8d UID: %-8d\n", a.Comm, a.Pid, a.Ppid, a.Uid)
 	if a.Filename != "" {
 		fmt.Printf("   | Path: %s\n", a.Filename)
+	}
+	if a.AncestorSuspicious {
+		if a.Filename != a.AncestorFilename {
+			fmt.Printf("   | Ancestor: %s [SUSPICIOUS LINEAGE]\n", a.AncestorFilename)
+		}
 	}
 	if a.Argv0 != "" {
 		fmt.Printf("   | Argv0: %s\n", a.Argv0)

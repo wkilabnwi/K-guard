@@ -41,6 +41,7 @@ func NewManager() (*Manager, error) {
 	tracepoints := []tpSpec{
 		{"syscalls", "sys_enter_execve", "tp_execve", m.Objects.TpExecve},
 		{"sched", "sched_process_exec", "tp_schedexec", m.Objects.TpSchedexec},
+		{"sched", "sched_process_fork", "tp_schedfork", m.Objects.TpSchedfork},
 		{"syscalls", "sys_enter_connect", "tp_connect", m.Objects.TpConnect},
 		{"syscalls", "sys_enter_openat", "tp_openat", m.Objects.TpOpenat},
 		{"syscalls", "sys_enter_openat2", "tp_openat2", m.Objects.TpOpenat2},

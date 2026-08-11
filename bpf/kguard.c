@@ -56,19 +56,32 @@ struct kguard_event {
     char comm[16];
     char filename[64];
     char argv0[64];  
-    
+
+    // connect specific args
     __u32 daddr;     
     __u8  daddr6[16];
     __u16 dport;     
     __u16 family;    
     char  unix_path[108]; 
 
+    // openat specific args
     __u32 write_fd;
     __u64 write_count;
     char  write_buf[64]; // Preview payload
+
+    // lineage fields
+    __u8  ancestor_suspicious;
+    char  ancestor_filename[64];
 };
 
 struct kguard_event *unused __attribute__((unused));
+
+// Process lineage state carried per PID
+struct process_lineage {
+    __u32 parent_pid;
+    __u8  suspicious_ancestor;
+    char  ancestor_filename[64];
+};
 
 // Maps
 struct {
@@ -110,7 +123,42 @@ struct {
     __type(value, __u8);
 } sensitive_write_paths SEC(".maps");
 
+// LRU_HASH map for automatically evicted process state
+struct {
+    __uint(type, 9); // BPF_MAP_TYPE_LRU_HASH
+    __uint(max_entries, 16384);
+    __type(key, __u32);
+    __type(value, struct process_lineage);
+} lineage_map SEC(".maps");
+
 // Helpers
+
+static __always_inline int path_in_map(const char *path, void *map) {
+    char full[64] = {0};
+    bpf_probe_read_kernel_str(full, sizeof(full), path);
+
+    __u8 *found = bpf_map_lookup_elem(map, full);
+    if (found && *found == 1) return 1;
+
+// I will leave my first implementation of this loop, just to rmemeber how dumb i was
+//     for (int len = 62; len > 1; len--) {
+//         if (key[len] == '/') {
+//             key[len + 1] = '\0';
+//             found = bpf_map_lookup_elem(map, key);
+//             if (found && *found == 1) return 1;
+//         }
+
+    #pragma unroll
+    for (int len = 62; len > 1; len--) {
+        if (full[len] == '/') {
+            char key[64] = {0};
+            __builtin_memcpy(key, full, len + 1); 
+            found = bpf_map_lookup_elem(map, key);
+            if (found && *found == 1) return 1;
+        }
+    }
+    return 0;
+}
 
 static __always_inline void fill_common(struct kguard_event *e, __u32 evt_type) {
     __u64 id = bpf_get_current_pid_tgid();
@@ -130,6 +178,16 @@ static __always_inline void fill_common(struct kguard_event *e, __u32 evt_type) 
     pid_t ppid;
     bpf_probe_read_kernel(&ppid, sizeof(ppid), &parent->tgid);
     e->ppid = (__u32)ppid;
+
+    // Looking up process lineage state
+    struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->pid);
+    if (lin) {
+        e->ancestor_suspicious = lin->suspicious_ancestor;
+        __builtin_memcpy(e->ancestor_filename, lin->ancestor_filename, sizeof(e->ancestor_filename));
+    } else {
+        e->ancestor_suspicious = 0;
+        __builtin_memset(e->ancestor_filename, 0, sizeof(e->ancestor_filename));
+    }
 }
 
 // execve tracepoint sensor
@@ -171,6 +229,37 @@ int tp_execve(struct syscall_execve_args *ctx) {
     return 0;
 }
 
+// sched fork sensor
+
+struct sched_process_fork_args {
+    unsigned short common_type;          
+    unsigned char  common_flags;         
+    unsigned char  common_preempt_count; 
+    int            common_pid;   
+    char           parent_comm[16];
+    pid_t          parent_pid;   
+    char           child_comm[16];    
+    pid_t          child_pid;  
+};
+
+SEC("tracepoint/sched/sched_process_fork")
+int tp_schedfork(struct sched_process_fork_args *ctx) {
+    __u32 ppid = (__u32)ctx->parent_pid;
+    __u32 cpid = (__u32)ctx->child_pid;
+
+    struct process_lineage child_lin = {0};
+    child_lin.parent_pid = ppid;
+
+    struct process_lineage *parent_lin = bpf_map_lookup_elem(&lineage_map, &ppid);
+    if (parent_lin) {
+        child_lin.suspicious_ancestor = parent_lin->suspicious_ancestor;
+        __builtin_memcpy(child_lin.ancestor_filename, parent_lin->ancestor_filename, sizeof(child_lin.ancestor_filename));
+    }
+
+    bpf_map_update_elem(&lineage_map, &cpid, &child_lin, BPF_ANY);
+    return 0;
+}
+
 // sched process sensor
 
 struct sched_process_exec_args {
@@ -184,7 +273,7 @@ struct sched_process_exec_args {
 };
 
 SEC("tracepoint/sched/sched_process_exec")
-int tp_schedexec (struct sched_process_exec_args *ctx) {
+int tp_schedexec(struct sched_process_exec_args *ctx) {
     struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return 0;
 
@@ -192,22 +281,28 @@ int tp_schedexec (struct sched_process_exec_args *ctx) {
 
     __u16 offset = ctx->filename_loc & 0xffff;
     const char *fn = (const char *)ctx + offset;
-
     bpf_probe_read_kernel_str(&e->filename, sizeof(e->filename), fn);
 
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    struct exec_scratch *scratch = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+    if (path_in_map(e->filename, &suspicious_paths)) {
+        struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->pid);
+        struct process_lineage updated_lin = {0};
 
-    if (scratch) {
-        __builtin_memcpy(e->argv0, scratch->argv0, sizeof(e->argv0));
-        bpf_map_delete_elem(&exec_scratch_map, &pid_tgid); // claimed, clean up now 
+        if (lin) {
+            updated_lin = *lin;
+        } else {
+            updated_lin.parent_pid = e->ppid;
+        }
+
+        updated_lin.suspicious_ancestor = 1;
+        __builtin_memcpy(updated_lin.ancestor_filename, e->filename, sizeof(updated_lin.ancestor_filename));
+        bpf_map_update_elem(&lineage_map, &e->pid, &updated_lin, BPF_ANY);
+
+        e->ancestor_suspicious = 1;
+        __builtin_memcpy(e->ancestor_filename, e->filename, sizeof(e->ancestor_filename));
     }
 
     bpf_ringbuf_submit(e, 0);
     return 0;
-
-
-
 }
 
 
@@ -334,33 +429,6 @@ struct syscall_openat_args {
     int flags;
     unsigned short mode;
 };
-
-static __always_inline int path_in_map(const char *path, void *map) {
-    char full[64] = {0};
-    bpf_probe_read_kernel_str(full, sizeof(full), path);
-
-    __u8 *found = bpf_map_lookup_elem(map, full);
-    if (found && *found == 1) return 1;
-
-// I will leave my first implementation of this loop, just to rmemeber how dumb i was
-//     for (int len = 62; len > 1; len--) {
-//         if (key[len] == '/') {
-//             key[len + 1] = '\0';
-//             found = bpf_map_lookup_elem(map, key);
-//             if (found && *found == 1) return 1;
-//         }
-
-    #pragma unroll
-    for (int len = 62; len > 1; len--) {
-        if (full[len] == '/') {
-            char key[64] = {0};
-            __builtin_memcpy(key, full, len + 1); 
-            found = bpf_map_lookup_elem(map, key);
-            if (found && *found == 1) return 1;
-        }
-    }
-    return 0;
-}
 
 SEC("tracepoint/syscalls/sys_enter_openat")
 int tp_openat(struct syscall_openat_args *ctx) {
@@ -523,6 +591,7 @@ int tp_memfd_create(struct syscall_memfd_create_args *ctx) {
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
+
 
 struct syscall_write_args {
     unsigned long long common_tp_fields;

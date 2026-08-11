@@ -6,3 +6,6 @@ scripts/
 test/
 .env
 bpf/include/vmlinux.h
+
+#Vendor
+.vscode

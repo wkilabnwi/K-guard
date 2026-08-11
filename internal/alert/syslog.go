@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"log/syslog"
+	"strings"
 )
 
 // SyslogSink ships every alert to the local syslog daemon at a
@@ -35,7 +36,7 @@ func (s *SyslogSink) Send(a Alert) {
 
 	msg := string(line)
 	var werr error
-	switch a.Severity {
+	switch strings.ToLower(a.Severity) {
 	case "critical":
 		werr = s.writer.Crit(msg)
 	case "high":

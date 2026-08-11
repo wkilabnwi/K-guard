@@ -22,21 +22,17 @@ block-list.
 
 ## 2. Suspicious-path exec + connect correlation
 
-**Scenario:** a binary copied into `/tmp` (a classic dropped-payload location) then makes an
-outbound connection individually unremarkable, but the *combination* in a short window is a
-strong signal of a reverse shell / C2 beacon.
+**Scenario:** A script or binary executing from a suspicious directory (e.g., `/tmp/test_malware/runner.sh`) spawns child processes (e.g., `/usr/bin/id`) that perform file access or network connections. Even if the child executable itself is a standard system tool, its origin under a suspicious process tree indicates malicious activity.
 
 ```bash
-cp /usr/bin/python3 /tmp/python3-runner
-chmod +x /tmp/python3-runner
-/tmp/python3-runner /tmp/conn_test.py   # connects out to 1.1.1.1:80
+cat /tmp/test_malware/runner.sh
+chmod +x /tmp/test_malware/runner.sh
+/tmp/test_malware/runner.sh
 ```
 
-![Setting up the suspicious-path exec + connect](docs/Correlation_cmds.png)
+![Setting up the suspicious-path exec + connect](docs/Correlation_Cmd.png)
 
-K-Guard's correlator (`internal/processor/correlate.go`) remembers that this PID exec'd from a
-suspicious path, and when the same PID opens a connection shortly after, escalates the alert
-from `low` to `high` severity automatically:
+Instead of relying on userspace time windows, K-Guard tracks process trees directly in eBPF kernel maps. When `runner.sh` (PID 7077) executes from `/tmp`, eBPF flags its process context. When its child process `id` (PID 7078) attempts a connection or file access, eBPF resolves the parent lineage, tags the alert with `[SUSPICIOUS LINEAGE]`, and escalates severity from `low` to `critical`:
 
 ![Correlated alert: exec from /tmp followed by outbound connect](docs/Correlation_Alert.png)
 

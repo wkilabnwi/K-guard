@@ -36,6 +36,10 @@ func (w *WebhookSink) Send(a Alert) {
 	summary := fmt.Sprintf("[K-Guard] %s severity=%s action=%s comm=%s pid=%d path=%s",
 		a.EventType, a.Severity, a.Action, a.Comm, a.Pid, a.Filename)
 
+	if a.AncestorSuspicious {
+		summary += fmt.Sprintf(" ancestor=%s", a.AncestorFilename)
+	}
+
 	body, err := json.Marshal(webhookPayload{Text: summary, Alert: a})
 	if err != nil {
 		log.Printf("[webhook] marshal error: %v", err)

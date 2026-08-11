@@ -68,18 +68,23 @@ Example config:
 
 ```json
 {
-  "enforcement_enabled": true,
-  "dedup_window_seconds": 10,
-  "allowlist": ["/usr/bin/ssh"],
-  "protected_comms": ["sshd", "systemd"],
-  "suspicious_path": ["/testkill/", "/tmp/"],
-  "ignored_connect_comms": ["docker"],
-  "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
   "rules": [
     { "name": "block-netcat", "match": "basename", "pattern": "nc", "severity": "critical", "action": "BLOCK" },
     { "name": "tmp-exec", "match": "prefix", "pattern": "/tmp/", "severity": "high", "action": "KILL", "suspicious_path_only": true },
     { "name": "known-malware-hash", "match": "sha256", "pattern": "<hex digest>", "severity": "critical", "action": "KILL" }
   ],
+
+  "enforcement_enabled": true,
+  "dedup_window_seconds": 10,
+
+  "allowlist": ["/usr/bin/ssh"],
+  "protected_comms": ["sshd", "systemd"],
+
+  "suspicious_path": ["/testkill/", "/tmp/"],
+  "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
+
+  "ignored_connect_comms": ["docker"],
+  
   "sinks": {
     "stdout": true,
     "syslog": true,
@@ -95,11 +100,7 @@ Duplicate alerts for the same `(rule, pid)` (or `(connect, pid, dest_ip)`,
 or `(event_type, pid)` for the generic sensors) within
 `dedup_window_seconds` are suppressed after the first.
 
-A small correlator remembers, per-PID, the most recent exec and whether
-it came from a configured suspicious path (see `suspicious_paths` above). If a
-`CONNECT` event follows shortly after, its severity is escalated from
-`low` to `high` and the alert notes the correlated exec, a decent
-signal for "downloaded to /tmp and immediately phoned home."
+Kernel-Level Lineage Tracking: Rather than relying on userspace lookups or race-prone time windows, K-Guard tracks process execution trees inside eBPF maps. When a binary originating from a path in `suspicious_paths` executes, eBPF flags its process tree context. Any subsequent actions—including file accesses (`OPEN_SENSITIVE`) or outbound socket connections (`CONNECT`), by that process or any of its child/forked processes automatically inherit this context, tag the alert with `[SUSPICIOUS LINEAGE]`, and escalate the severity to `CRITICAL`.
 
 Outbound connects from processes listed in `ignored_connect_comms`
 (e.g. `["sshd"]`) are filtered before reaching the engine at all, as are
@@ -117,7 +118,7 @@ etc.).
 
 ## Alert sinks
 
-- **stdout** : human-readable, multi-line per alert
+- **stdout** : human-readable, multi-line per alert. Promotes lineage-flagged events to `[SECURITY]` and outputs the `Ancestor` binary path along with forked process context.
 - **syslog** : JSON body, severity mapped to a syslog level
 - **webhook** : POSTs `{ "text": <summary>, "alert": <Alert> }` as JSON
 - **store** : append-only, date-rotated JSON-Lines files; backs the
