@@ -132,80 +132,60 @@ func (m *Manager) SetEnforcement(enabled bool) error {
 	return m.Objects.EnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
 }
 
-// SyncBlockedPaths reloads blocked_paths with the desired set from
-// config, adding or removing only what changed rather than clearing and
-// reinserting everything, a full clear would leave a brief window where
-// a path that should stay blocked is absent from the map
-func (m *Manager) SyncBlockedPaths(paths []string) error {
-	bm := m.Objects.BlockedPaths
-	if bm == nil {
+// This is the Sync Helper function, it syncs the paths with
+// whichever Map it's linked to
+// If you're asking, why don't we delete everything then insert
+// to same perf, deleting everything leavs a little amount of time
+// where a binary that could be blocked isn't in the list, so we
+// avoid that
+func syncFixedPaths(em *ebpf.Map, paths []string) error {
+	if em == nil {
 		return nil
 	}
 
-	var existing [][64]byte
-	var key [64]byte
+	existingSet := make(map[[256]byte]bool)
+	var key [256]byte
 	var val uint8
-	it := bm.Iterate()
+	it := em.Iterate()
 	for it.Next(&key, &val) {
-		existing = append(existing, key)
+		existingSet[key] = true
 	}
 	if err := it.Err(); err != nil {
-		return fmt.Errorf("iterating blocked_paths: %w", err)
+		return fmt.Errorf("iterating map: %w", err)
 	}
 
-	want := make(map[[64]byte]bool, len(paths))
+	want := make(map[[256]byte]bool, len(paths))
 	for _, p := range paths {
-		var k [64]byte
+		var k [256]byte
 		copy(k[:], p)
 		want[k] = true
 	}
 
-	for _, k := range existing {
+	for k := range existingSet {
 		if !want[k] {
-			_ = bm.Delete(k)
+			_ = em.Delete(k)
 		}
 	}
-
 	for k := range want {
-		if err := bm.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("updating blocked_paths: %w", err)
+		if !existingSet[k] {
+			if err := em.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
+				return fmt.Errorf("updating map: %w", err)
+			}
 		}
 	}
-
 	return nil
+}
+
+func (m *Manager) SyncBlockedPaths(paths []string) error {
+	return syncFixedPaths(m.Objects.BlockedPaths, paths)
 }
 
 func (m *Manager) SyncSuspiciousPaths(paths []string) error {
-	sm := m.Objects.SuspiciousPaths
-	if sm == nil {
-		return nil
-	}
-
-	for _, p := range paths {
-		var k [64]byte
-		copy(k[:], p)
-		val := uint8(1)
-		if err := sm.Update(k, val, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("updating suspicious_paths: %w", err)
-		}
-	}
-	return nil
+	return syncFixedPaths(m.Objects.SuspiciousPaths, paths)
 }
 
 func (m *Manager) SyncSensitiveWritePaths(paths []string) error {
-	sm := m.Objects.SensitiveWritePaths
-	if sm == nil {
-		return nil
-	}
-	for _, p := range paths {
-		var k [64]byte
-		copy(k[:], p)
-		val := uint8(1)
-		if err := sm.Update(k, val, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("updating sensitive_write_paths: %w", err)
-		}
-	}
-	return nil
+	return syncFixedPaths(m.Objects.SensitiveWritePaths, paths)
 }
 
 func (m *Manager) Close() {

@@ -107,14 +107,7 @@ Outbound connects from processes listed in `ignored_connect_comms`
 any loopback destinations (`127.0.0.0/8`, `::1`), both are near-always
 background/tunnel noise rather than signal worth alerting on.
 
-`sensitive_write_paths` are matched independently of the rule list: any
-`openat`/`openat2` call with write intent (`O_WRONLY` or `O_RDWR`) whose
-target falls under one of these paths raises a `SENSITIVE_WRITE` alert
-at `critical` severity, regardless of whether the path also appears in
-`suspicious_paths` or matches any rule. Path matching checks the exact
-path first, then walks up the directory tree looking for a configured
-prefix (so `/etc/` in the list covers `/etc/shadow`, `/etc/cron.d/foo`,
-etc.).
+`sensitive_write_paths` are matched independently of the rule list: any `openat/openat2` call with write intent (`O_WRONLY` or `O_RDWR`) whose target falls under one of these paths raises a `SENSITIVE_WRITE` alert at `critical` severity. Duplicate events for the same PID remain subject to `dedup_window_seconds`. Path matching checks the exact path first, then walks up directory prefixes in kernel-space.
 
 When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.

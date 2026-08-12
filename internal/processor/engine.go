@@ -115,7 +115,7 @@ func isAllowlisted(cfg *config.Config, filename string) bool {
 // prevented pre-flight by the LSM hook (EVT_EXEC_BLOCKED), in that case no
 // KILL is attempted (there is no process to kill; it never ran), but a
 // BLOCK-severity alert is still produced.
-func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, argv0 string, blocked bool, ancestorSuspicious bool, ancestorFilename string) {
+func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, argv0 string, blocked bool, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
 	cfg := e.cfg.Current()
 	h := &execHash{pid: pid}
 
@@ -128,11 +128,16 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 
 	if blocked {
 		e.metrics.IncBlock()
+		detail := ""
+		if pathTruncated {
+			detail = "path truncated during read, match against blocked_paths may be unreliable"
+		}
 		e.dispatcher.Dispatch(alert.Alert{
 			Timestamp: time.Now(), Severity: string(config.SeverityCritical), Action: string(config.ActionBlock),
 			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
 			CgroupID: cgroupID, Filename: filename, Argv0: argv0,
 			AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+			PathTruncated: pathTruncated, Detail: detail,
 		})
 		return
 	}
@@ -156,10 +161,20 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		}
 		e.metrics.IncRuleHit(r.Name)
 
+		sev := r.Severity
+		detail := ""
+		if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
+			sev = config.SeverityMedium
+		}
+		if pathTruncated {
+			detail = "path truncated during read, match against configured path lists may be unreliable"
+		}
+
 		a := alert.Alert{
 			Timestamp: time.Now(), RuleName: r.Name, Severity: string(r.Severity), Action: string(r.Action),
 			EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 			Filename: filename, Argv0: argv0, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+			PathTruncated: pathTruncated, Detail: detail,
 		}
 
 		switch r.Action {
@@ -211,7 +226,7 @@ func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupI
 // AnalyzeGeneric handles every other sensor type with a shared, simple severity
 // default. each is still its own distinct EventType in the alert so sinks
 // and the dashboard can filter them independently.
-func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severity, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, filename, detail string, ancestorSuspicious bool, ancestorFilename string) {
+func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severity, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, filename, detail string, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
 	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid))) {
 		return
 	}
@@ -230,9 +245,18 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 		}
 	}
 
+	if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
+		sev = config.SeverityMedium
+		if detail != "" {
+			detail += " | "
+		}
+		detail += "path truncated during read, manual check the full path"
+	}
+
 	e.dispatcher.Dispatch(alert.Alert{
 		Timestamp: time.Now(), Severity: string(sev), Action: string(config.ActionAlert),
 		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 		Filename: filename, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+		PathTruncated: pathTruncated,
 	})
 }

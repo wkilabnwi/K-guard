@@ -10,15 +10,23 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 )
+
+type cachedHash struct {
+	hex   string
+	inode uint64
+	mtime int64
+	size  int64
+}
 
 type HashCache struct {
 	mu    sync.RWMutex
-	items map[string]string
+	items map[string]cachedHash
 }
 
 var globalHashCache = &HashCache{
-	items: make(map[string]string),
+	items: make(map[string]cachedHash),
 }
 
 type execHash struct {
@@ -26,6 +34,16 @@ type execHash struct {
 	hex      string
 	err      error
 	computed bool
+}
+
+// Helper functions to get the inode field
+// ok = false means we couldn't verify
+func statIdentity(fi os.FileInfo) (inode uint64, mtime int64, size int64, ok bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, 0, false
+	}
+	return st.Ino, fi.ModTime().UnixNano(), fi.Size(), true
 }
 
 // get returns the SHA256 hex digest of the executable for the given PID by streaming
@@ -41,24 +59,31 @@ func (h *execHash) get() (string, error) {
 
 	procPath := "/proc/" + strconv.Itoa(int(h.pid)) + "/exe"
 
-	// Resolve symlink to get actual canonical disk path
 	resolvedPath, err := filepath.EvalSymlinks(procPath)
 	if err != nil {
 		h.err = fmt.Errorf("resolving symlink %s: %w", procPath, err)
 		return "", h.err
 	}
 
-	// Check in-memory cache first
+	fi, err := os.Stat(procPath)
+	if err != nil {
+		h.err = fmt.Errorf("stat %s: %w", procPath, err)
+		return "", h.err
+	}
+	inode, mtime, size, ok := statIdentity(fi)
+
 	globalHashCache.mu.RLock()
-	cachedHash, exists := globalHashCache.items[resolvedPath]
+	cached, exists := globalHashCache.items[resolvedPath]
 	globalHashCache.mu.RUnlock()
 
-	if exists {
-		h.hex = cachedHash
+	if exists && ok && cached.inode == inode && cached.mtime == mtime && cached.size == size {
+		h.hex = cached.hex
 		return h.hex, nil
 	}
 
-	// Cache miss: stream binary and hash from disk
+	// Cache miss, or stat id changed since we cached it, or we
+	// couldn't verify identity at all so we re-hash from disk rather than
+	// trust an entry that's possibly stale
 	f, err := os.Open(procPath)
 	if err != nil {
 		h.err = fmt.Errorf("opening %s: %w", procPath, err)
@@ -74,12 +99,11 @@ func (h *execHash) get() (string, error) {
 
 	computedHex := hex.EncodeToString(hasher.Sum(nil))
 
-	// Store result in cache for future PIDs
 	globalHashCache.mu.Lock()
 	if len(globalHashCache.items) > 1000 {
-		globalHashCache.items = make(map[string]string)
+		globalHashCache.items = make(map[string]cachedHash)
 	}
-	globalHashCache.items[resolvedPath] = computedHex
+	globalHashCache.items[resolvedPath] = cachedHash{hex: computedHex, inode: inode, mtime: mtime, size: size}
 	globalHashCache.mu.Unlock()
 
 	h.hex = computedHex

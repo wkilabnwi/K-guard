@@ -2,12 +2,12 @@
 
 // 
 // Two classes of program live here:
-// 1. Tracepoint-based SENSORS (tp_execve, sched_process_exec, tp_connect, tp_openat, tp_openat2, tp_ptrace,
+// 1 - Tracepoint-based SENSORS (tp_execve, sched_process_exec, tp_connect, tp_openat, tp_openat2, tp_ptrace,
 //  tp_setuid, tp_init_module, tp_memfd_create). These only observe; they
 //  cannot block anything. They fire on syscall entry and are cheap and
 //  portable.
 // 
-// 2. An LSM-based ENFORCER (lsm_bprm_check): it runs *before* the kernel c
+// 2 - An LSM-based ENFORCER (lsm_bprm_check): it runs *before* the kernel c
 //    ommits to executing a binary and return -EPERM to block the exec outright
 //    instead of relying on "let it run, then SIGKILL the PID"     
 // 
@@ -44,6 +44,8 @@
 #define O_WRONLY_ 0x0001
 #define O_RDWR_   0x0002
 
+#define PATH_BUF_SIZE 256
+
 struct kguard_event {
     __u64 timestamp_ns;
     __u32 pid;
@@ -54,7 +56,7 @@ struct kguard_event {
     __u32 event_type;
     __s32 ret;       
     char comm[16];
-    char filename[64];
+    char filename[PATH_BUF_SIZE];
     char argv0[64];  
 
     // connect specific args
@@ -71,7 +73,10 @@ struct kguard_event {
 
     // lineage fields
     __u8  ancestor_suspicious;
-    char  ancestor_filename[64];
+    char  ancestor_filename[PATH_BUF_SIZE];
+
+    // saved for truncated paths
+    __u8  path_truncated; 
 };
 
 struct kguard_event *unused __attribute__((unused));
@@ -80,7 +85,12 @@ struct kguard_event *unused __attribute__((unused));
 struct process_lineage {
     __u32 parent_pid;
     __u8  suspicious_ancestor;
-    char  ancestor_filename[64];
+    char  ancestor_filename[PATH_BUF_SIZE];
+};
+
+struct path_scratch {
+    char primary[PATH_BUF_SIZE]; // caller's own path buffer (tp_openat/openat2, lsm_bprm_check)
+    char walk[PATH_BUF_SIZE];    // path_in_map's private working copy for the prefix walk
 };
 
 // Maps
@@ -95,7 +105,7 @@ struct {
 struct {
     __uint(type, 1); // BPF_MAP_TYPE_HASH 
     __uint(max_entries, 1024);
-    __type(key, char[64]);
+    __type(key, char[PATH_BUF_SIZE]);
     __type(value, __u8);
 } blocked_paths SEC(".maps");
 
@@ -112,14 +122,14 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, char[64]);
+    __type(key, char[PATH_BUF_SIZE]);
     __type(value, __u8);
 } suspicious_paths SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, char[64]);
+    __type(key, char[PATH_BUF_SIZE]);
     __type(value, __u8);
 } sensitive_write_paths SEC(".maps");
 
@@ -131,36 +141,50 @@ struct {
     __type(value, struct process_lineage);
 } lineage_map SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct path_scratch);
+} path_scratch_map SEC(".maps");
+
 // Helpers
 
 static __always_inline int path_in_map(const char *path, void *map) {
-    char full[64] = {0};
-    bpf_probe_read_kernel_str(full, sizeof(full), path);
+    __u32 zero = 0;
+    struct path_scratch *scratch = bpf_map_lookup_elem(&path_scratch_map, &zero);
+    if (!scratch) return 0;
+    char *full = scratch->walk;
+
+    bpf_probe_read_kernel_str(full, PATH_BUF_SIZE, path);
 
     __u8 *found = bpf_map_lookup_elem(map, full);
     if (found && *found == 1) return 1;
 
-// I will leave my first implementation of this loop, just to rmemeber how dumb i was
-//     for (int len = 62; len > 1; len--) {
-//         if (key[len] == '/') {
-//             key[len + 1] = '\0';
-//             found = bpf_map_lookup_elem(map, key);
-//             if (found && *found == 1) return 1;
-//         }
-
     #pragma unroll
-    for (int len = 62; len > 1; len--) {
+    for (int len = (PATH_BUF_SIZE - 2) ; len > 1; len--) {
+        full[len + 1] = 0;
         if (full[len] == '/') {
-            char key[64] = {0};
-            __builtin_memcpy(key, full, len + 1); 
-            found = bpf_map_lookup_elem(map, key);
+            found = bpf_map_lookup_elem(map, full);
             if (found && *found == 1) return 1;
         }
     }
     return 0;
 }
 
+static __always_inline long read_path(char *dst, __u32 dst_size, const void *src,
+                                       int from_user, __u8 *truncated) {
+    long n = from_user
+        ? bpf_probe_read_user_str(dst, dst_size, src)
+        : bpf_probe_read_kernel_str(dst, dst_size, src);
+    *truncated = (n == (long)dst_size) ? 1 : 0;
+    return n;
+}
+
 static __always_inline void fill_common(struct kguard_event *e, __u32 evt_type) {
+    // We zero out the memory before using it
+    __builtin_memset(e, 0, sizeof(*e));
+
     __u64 id = bpf_get_current_pid_tgid();
     __u64 uid_gid = bpf_get_current_uid_gid();
     e->timestamp_ns = bpf_ktime_get_ns();
@@ -281,7 +305,18 @@ int tp_schedexec(struct sched_process_exec_args *ctx) {
 
     __u16 offset = ctx->filename_loc & 0xffff;
     const char *fn = (const char *)ctx + offset;
-    bpf_probe_read_kernel_str(&e->filename, sizeof(e->filename), fn);
+    __u8 truncated = 0;
+    read_path(e->filename, sizeof(e->filename), fn, 0, &truncated);
+    e->path_truncated = truncated;
+
+    // We actually populate the argv0, if nothing is there it got
+    // zeroed out by fill_common so we wouldn't leak stale data
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    struct exec_scratch *scratch = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+    if (scratch) {
+        __builtin_memcpy(e->argv0, scratch->argv0, sizeof(e->argv0));
+        bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
+    }
 
     if (path_in_map(e->filename, &suspicious_paths)) {
         struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->pid);
@@ -321,9 +356,10 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm, int ret) {
         return 0;
     }
 
-    char path[64] = {0};
+    char path[PATH_BUF_SIZE] = {0};
     //  bprm->filename is a kernel-space pointer at this point (not user memory). 
-    bpf_probe_read_kernel_str(&path, sizeof(path), bprm->filename);
+   __u8 truncated = 0;
+    read_path(path, sizeof(path), bprm->filename, 0, &truncated);
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
     if (blocked && *blocked == 1) {
@@ -332,6 +368,15 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm, int ret) {
             fill_common(e, EVT_EXEC_BLOCKED);
             __builtin_memcpy(e->filename, path, sizeof(path));
             e->ret = -1; 
+            e->path_truncated = truncated;
+
+            __u64 pid_tgid = bpf_get_current_pid_tgid();
+            struct exec_scratch *scratch = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+            if (scratch) {
+                __builtin_memcpy(e->argv0, scratch->argv0, sizeof(e->argv0));
+                bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
+            }
+
             bpf_ringbuf_submit(e, 0);
         }
         return -1; //kernel aborts the exec 
@@ -432,8 +477,15 @@ struct syscall_openat_args {
 
 SEC("tracepoint/syscalls/sys_enter_openat")
 int tp_openat(struct syscall_openat_args *ctx) {
-    char path[64] = {0};
-    int n = bpf_probe_read_user_str(&path, sizeof(path), ctx->filename);
+    // This change was implemented to mitigate the problem of us 
+    // exceeding the BPF stack limit
+    __u32 zero = 0;
+    struct path_scratch *scratch = bpf_map_lookup_elem(&path_scratch_map, &zero);
+    if (!scratch) return 0;
+    char *path = scratch->primary;
+
+    __u8 truncated = 0;
+    long n = read_path(path, sizeof(path), ctx->filename, 1, &truncated);
     if (n <= 0) return 0;
 
     int write_intent = (ctx->flags & O_ACCMODE_MASK) == O_WRONLY_ ||
@@ -443,8 +495,9 @@ int tp_openat(struct syscall_openat_args *ctx) {
         struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
             fill_common(e, EVT_SENSITIVE_WRITE);
-            __builtin_memcpy(e->filename, path, sizeof(path));
+            __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
             e->ret = ctx->flags; // stash raw flags for userspace to decode
+            e->path_truncated = truncated;
             bpf_ringbuf_submit(e, 0);
         }
     }
@@ -455,7 +508,8 @@ int tp_openat(struct syscall_openat_args *ctx) {
     struct kguard_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
     if (!e2) return 0;
     fill_common(e2, EVT_OPEN_SENSITIVE);
-    __builtin_memcpy(e2->filename, path, sizeof(path));
+    __builtin_memcpy(e2->filename, path, PATH_BUF_SIZE);
+    e2->path_truncated = truncated;
     bpf_ringbuf_submit(e2, 0);
     return 0;
 }
@@ -480,8 +534,13 @@ struct syscall_openat2_args {
 
 SEC("tracepoint/syscalls/sys_enter_openat2")
 int tp_openat2(struct syscall_openat2_args *ctx) {
-    char path[64] = {0};
-    int n = bpf_probe_read_user_str(&path, sizeof(path), ctx->filename);
+    __u32 zero = 0;
+    struct path_scratch *scratch = bpf_map_lookup_elem(&path_scratch_map, &zero);
+    if (!scratch) return 0;
+    char *path = scratch->primary;
+
+    __u8 truncated = 0;
+    long n = read_path(path, sizeof(path), ctx->filename, 1, &truncated);
     if (n <= 0) return 0;
 
     struct open_how_min how = {0};
@@ -497,8 +556,9 @@ int tp_openat2(struct syscall_openat2_args *ctx) {
         struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
             fill_common(e, EVT_SENSITIVE_WRITE);
-            __builtin_memcpy(e->filename, path, sizeof(path));
+            __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
             e->ret = (__s32)flags;
+            e->path_truncated = truncated;
             bpf_ringbuf_submit(e, 0);
         }
     }
@@ -509,7 +569,8 @@ int tp_openat2(struct syscall_openat2_args *ctx) {
     struct kguard_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
     if (!e2) return 0;
     fill_common(e2, EVT_OPEN_SENSITIVE);
-    __builtin_memcpy(e2->filename, path, sizeof(path));
+    __builtin_memcpy(e2->filename, path, PATH_BUF_SIZE);
+    e2->path_truncated = truncated;
     bpf_ringbuf_submit(e2, 0);
     return 0;
 }

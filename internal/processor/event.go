@@ -57,18 +57,20 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 	ancestorSuspicious := event.AncestorSuspicious == 1
 	ancestorFilename := int8ToString(event.AncestorFilename[:])
 
+	pathTruncated := event.PathTruncated == 1
+
 	switch et {
 	case kebpf.EventExec:
 		if filename == "" {
 			filename = "UNKNOWN_OR_EMPTY"
 		}
-		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, false, ancestorSuspicious, ancestorFilename)
+		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, false, ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventExecBlocked:
 		if filename == "" {
 			filename = "UNKNOWN_OR_EMPTY"
 		}
-		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, true, ancestorSuspicious, ancestorFilename)
+		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, true, ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventConnect:
 		// Skip known noisy background processes entirely
@@ -113,26 +115,26 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		r.engine.AnalyzeConnect(event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, destIP, destPort, ancestorSuspicious, ancestorFilename)
 	case kebpf.EventOpenSensitive:
-		r.engine.AnalyzeGeneric("OPEN_SENSITIVE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "", ancestorSuspicious, ancestorFilename)
+		r.engine.AnalyzeGeneric("OPEN_SENSITIVE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventPtrace:
 		r.engine.AnalyzeGeneric("PTRACE", config.SeverityMedium, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "",
-			fmt.Sprintf("ptrace request=%d", event.Ret), ancestorSuspicious, ancestorFilename)
+			fmt.Sprintf("ptrace request=%d", event.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventSetuid:
 		r.engine.AnalyzeGeneric("SETUID", config.SeverityMedium, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "",
-			fmt.Sprintf("target uid=%d", event.Ret), ancestorSuspicious, ancestorFilename)
+			fmt.Sprintf("target uid=%d", event.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventModuleLoad:
-		r.engine.AnalyzeGeneric("MODULE_LOAD", config.SeverityCritical, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "", "", ancestorSuspicious, ancestorFilename)
+		r.engine.AnalyzeGeneric("MODULE_LOAD", config.SeverityCritical, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "", "", ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventMemfd:
-		r.engine.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "", ancestorSuspicious, ancestorFilename)
+		r.engine.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
 
 	case kebpf.EventSensitiveWrite:
 		r.engine.AnalyzeGeneric("SENSITIVE_WRITE", config.SeverityCritical,
 			event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId,
-			filename, fmt.Sprintf("open flags=0x%x (write intent on protected path)", event.Ret), ancestorSuspicious, ancestorFilename)
+			filename, fmt.Sprintf("open flags=0x%x (write intent on protected path)", event.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
 	}
 }
 
