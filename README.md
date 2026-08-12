@@ -100,7 +100,7 @@ Duplicate alerts for the same `(rule, pid)` (or `(connect, pid, dest_ip)`,
 or `(event_type, pid)` for the generic sensors) within
 `dedup_window_seconds` are suppressed after the first.
 
-Kernel-Level Lineage Tracking: Rather than relying on userspace lookups or race-prone time windows, K-Guard tracks process execution trees inside eBPF maps. When a binary originating from a path in `suspicious_paths` executes, eBPF flags its process tree context. Any subsequent actions—including file accesses (`OPEN_SENSITIVE`) or outbound socket connections (`CONNECT`), by that process or any of its child/forked processes automatically inherit this context, tag the alert with `[SUSPICIOUS LINEAGE]`, and escalate the severity to `CRITICAL`.
+Kernel-Level Lineage Tracking: Rather than relying on userspace lookups or race-prone time windows, K-Guard tracks process execution trees inside eBPF maps. When a binary originating from a path in `suspicious_paths` executes, eBPF flags its process tree context. Any subsequent actions, including file accesses (`OPEN_SENSITIVE`) or outbound socket connections (`CONNECT`), by that process or any of its child/forked processes automatically inherit this context, tag the alert with `[SUSPICIOUS LINEAGE]`, and escalate the severity to `CRITICAL`.
 
 Outbound connects from processes listed in `ignored_connect_comms`
 (e.g. `["sshd"]`) are filtered before reaching the engine at all, as are
@@ -115,6 +115,10 @@ at `critical` severity, regardless of whether the path also appears in
 path first, then walks up the directory tree looking for a configured
 prefix (so `/etc/` in the list covers `/etc/shadow`, `/etc/cron.d/foo`,
 etc.).
+
+When evaluating `sha256` rules:
+- **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
+- **Cross-PID In-Memory Cache**: Hashes are resolved to their canonical disk path and cached in a thread-safe in-memory cache. If multiple processes (across hundreds of PIDs) execute the same binary, only the first process triggers disk I/O, subsequent checks hit RAM instantly.
 
 ## Alert sinks
 
