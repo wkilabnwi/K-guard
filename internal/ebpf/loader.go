@@ -187,8 +187,6 @@ func syncFixedPaths(em *ebpf.Map, paths []string) error {
 		}
 	}
 	for k := range want {
-		strKey := strings.TrimRight(string(k[:]), "\x00")
-		log.Printf("[DEBUG GO] Map Sync -> Pushing key: %q", strKey)
 		if !existingSet[k] {
 			if err := em.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
 				return fmt.Errorf("updating map: %w", err)

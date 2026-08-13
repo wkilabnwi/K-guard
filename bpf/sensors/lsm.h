@@ -54,17 +54,14 @@ for (__u32 i = 0; i < (PATH_BUF_SIZE / 8); i++) {
     if ((i * 8) >= word_start)
         path64[i] = 0;
 }
-    bpf_printk("LSM [2]: Resolved path = '%s'", path);
     // bpf_d_path returns total path string length including null byte.
     // If length >= PATH_BUF_SIZE, the buffer reached capacity and was truncated
     
 
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
-    bpf_printk("LSM [3]: Map lookup for '%s' returned ptr=%p", path, blocked);
 
     if (blocked && *blocked == 1) {
-        bpf_printk("LSM [4]: MATCH FOUND! BLOCKING EXECUTION!");
         struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
             fill_common(e, EVT_EXEC_BLOCKED);
