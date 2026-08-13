@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"path/filepath"
 
 	"k-guard/internal/config"
 	kebpf "k-guard/internal/ebpf"
@@ -51,11 +52,12 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 	r.metrics.IncEvent(et.String())
 
 	comm := int8ToString(event.Comm[:])
-	filename := int8ToString(event.Filename[:])
+	uncleanfilename := int8ToString(event.Filename[:])
+	filename := resolveAbsolutePath(event.Pid, uncleanfilename)
 	argv0 := int8ToString(event.Argv0[:])
 
 	ancestorSuspicious := event.AncestorSuspicious == 1
-	ancestorFilename := int8ToString(event.AncestorFilename[:])
+	ancestorFilename := filepath.Clean(int8ToString(event.AncestorFilename[:]))
 
 	pathTruncated := event.PathTruncated == 1
 
@@ -149,4 +151,25 @@ func int8ToString(bs []int8) string {
 		b = append(b, byte(v))
 	}
 	return string(b)
+}
+
+func resolveAbsolutePath(pid uint32, rawPath string) string {
+	if rawPath == "" {
+		return ""
+	}
+
+	clean := filepath.Clean(rawPath)
+
+	// If it's already an absolute path (starts with /), return immediately
+	if filepath.IsAbs(clean) {
+		return clean
+	}
+
+	// For relative paths, evaluate against the process's working directory in /proc
+	procCwd := fmt.Sprintf("/proc/%d/cwd/%s", pid, clean)
+	if resolved, err := filepath.EvalSymlinks(procCwd); err == nil {
+		return resolved
+	}
+
+	return clean
 }

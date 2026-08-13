@@ -384,11 +384,15 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
     char *path = scratch->primary; // Offloaded to map memory
     __builtin_memset(path, 0, PATH_BUF_SIZE);
 
-    __u8 truncated = 0;
-    long n = read_path(path, PATH_BUF_SIZE, bprm->filename, 0, &truncated);
-    if (n <= 0) {
-        return 0; // Abort if reading the path failed
+    // we use bpf_d_path to solve the problem of an attcker using .././/./.. in paths for example
+    long ret = bpf_d_path(&bprm->file->f_path, path, PATH_BUF_SIZE);
+    if (ret < 0) {
+        return 0; // Fail-open on resolution failure to avoid locking up host
     }
+
+    // bpf_d_path returns total path string length including null byte.
+    // If length >= PATH_BUF_SIZE, the buffer reached capacity and was truncated
+    __u8 truncated = (ret >= PATH_BUF_SIZE) ? 1 : 0;
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
     if (blocked && *blocked == 1) {
