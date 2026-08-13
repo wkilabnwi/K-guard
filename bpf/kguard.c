@@ -88,9 +88,10 @@ struct process_lineage {
     char  ancestor_filename[PATH_BUF_SIZE];
 };
 
-struct path_scratch {
+struct scratch_buffer {
     char primary[PATH_BUF_SIZE]; // caller's own path buffer (tp_openat/openat2, lsm_bprm_check)
-    char walk[PATH_BUF_SIZE];    // path_in_map's private working copy for the prefix walk
+    char walk[PATH_BUF_SIZE];   // path_in_map's private working copy for the prefix walk
+    struct process_lineage lin;  
 };
 
 // Maps
@@ -145,29 +146,30 @@ struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, struct path_scratch);
-} path_scratch_map SEC(".maps");
+    __type(value, struct scratch_buffer);
+} scratch_map SEC(".maps");
 
 // Helpers
 
 static __always_inline int path_in_map(const char *path, void *map) {
     __u32 zero = 0;
-    struct path_scratch *scratch = bpf_map_lookup_elem(&path_scratch_map, &zero);
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
     if (!scratch) return 0;
     char *full = scratch->walk;
 
+    __builtin_memset(full, 0, PATH_BUF_SIZE);
     bpf_probe_read_kernel_str(full, PATH_BUF_SIZE, path);
 
     __u8 *found = bpf_map_lookup_elem(map, full);
     if (found && *found == 1) return 1;
 
-    #pragma unroll
-    for (int len = (PATH_BUF_SIZE - 2) ; len > 1; len--) {
-        full[len + 1] = 0;
+    for (int len = (PATH_BUF_SIZE - 2); len >= 0; len--) {
         if (full[len] == '/') {
+            full[len + 1] = '\0';
             found = bpf_map_lookup_elem(map, full);
             if (found && *found == 1) return 1;
         }
+        full[len + 1] = '\0';
     }
     return 0;
 }
@@ -177,6 +179,11 @@ static __always_inline long read_path(char *dst, __u32 dst_size, const void *src
     long n = from_user
         ? bpf_probe_read_user_str(dst, dst_size, src)
         : bpf_probe_read_kernel_str(dst, dst_size, src);
+
+        if (n <= 0) {
+        *truncated = 0;
+        return n;
+    }
     *truncated = (n == (long)dst_size) ? 1 : 0;
     return n;
 }
@@ -268,19 +275,24 @@ struct sched_process_fork_args {
 
 SEC("tracepoint/sched/sched_process_fork")
 int tp_schedfork(struct sched_process_fork_args *ctx) {
+    __u32 zero = 0;
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
+    if (!scratch) return 0;
+
     __u32 ppid = (__u32)ctx->parent_pid;
     __u32 cpid = (__u32)ctx->child_pid;
 
-    struct process_lineage child_lin = {0};
-    child_lin.parent_pid = ppid;
+    struct process_lineage *child_lin = &scratch->lin; // Offloaded to map memory
+    __builtin_memset(child_lin, 0, sizeof(*child_lin));
+    child_lin->parent_pid = ppid;
 
     struct process_lineage *parent_lin = bpf_map_lookup_elem(&lineage_map, &ppid);
     if (parent_lin) {
-        child_lin.suspicious_ancestor = parent_lin->suspicious_ancestor;
-        __builtin_memcpy(child_lin.ancestor_filename, parent_lin->ancestor_filename, sizeof(child_lin.ancestor_filename));
+        child_lin->suspicious_ancestor = parent_lin->suspicious_ancestor;
+        __builtin_memcpy(child_lin->ancestor_filename, parent_lin->ancestor_filename, sizeof(child_lin->ancestor_filename));
     }
 
-    bpf_map_update_elem(&lineage_map, &cpid, &child_lin, BPF_ANY);
+    bpf_map_update_elem(&lineage_map, &cpid, child_lin, BPF_ANY);
     return 0;
 }
 
@@ -298,39 +310,53 @@ struct sched_process_exec_args {
 
 SEC("tracepoint/sched/sched_process_exec")
 int tp_schedexec(struct sched_process_exec_args *ctx) {
+    __u32 zero = 0;
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
+    if (!scratch) return 0;
+
+    char *filename = scratch->primary; // Offloaded to map memory
+    __builtin_memset(filename, 0, PATH_BUF_SIZE);
+
+    __u16 offset = ctx->filename_loc & 0xffff;
+    const char *fn = (const char *)ctx + offset;
+    __u8 truncated = 0;
+
+    long n = read_path(filename, PATH_BUF_SIZE, fn, 0, &truncated);
+    if (n <= 0) {
+        return 0; // Abort if reading path failed
+    }
+
     struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return 0;
 
     fill_common(e, EVT_EXEC);
 
-    __u16 offset = ctx->filename_loc & 0xffff;
-    const char *fn = (const char *)ctx + offset;
-    __u8 truncated = 0;
-    read_path(e->filename, sizeof(e->filename), fn, 0, &truncated);
+    __builtin_memcpy(e->filename, filename, sizeof(e->filename));
     e->path_truncated = truncated;
 
     // We actually populate the argv0, if nothing is there it got
     // zeroed out by fill_common so we wouldn't leak stale data
     __u64 pid_tgid = bpf_get_current_pid_tgid();
-    struct exec_scratch *scratch = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
-    if (scratch) {
-        __builtin_memcpy(e->argv0, scratch->argv0, sizeof(e->argv0));
+    struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+    if (scratch2) {
+        __builtin_memcpy(e->argv0, scratch2->argv0, sizeof(e->argv0));
         bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
     }
 
     if (path_in_map(e->filename, &suspicious_paths)) {
         struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->pid);
-        struct process_lineage updated_lin = {0};
+        struct process_lineage *updated_lin = &scratch->lin; // Offloaded to map memory
+        __builtin_memset(updated_lin, 0, sizeof(*updated_lin));
 
         if (lin) {
-            updated_lin = *lin;
+            *updated_lin = *lin;
         } else {
-            updated_lin.parent_pid = e->ppid;
+            updated_lin->parent_pid = e->ppid;
         }
 
-        updated_lin.suspicious_ancestor = 1;
-        __builtin_memcpy(updated_lin.ancestor_filename, e->filename, sizeof(updated_lin.ancestor_filename));
-        bpf_map_update_elem(&lineage_map, &e->pid, &updated_lin, BPF_ANY);
+        updated_lin->suspicious_ancestor = 1;
+        __builtin_memcpy(updated_lin->ancestor_filename, e->filename, sizeof(updated_lin->ancestor_filename));
+        bpf_map_update_elem(&lineage_map, &e->pid, updated_lin, BPF_ANY);
 
         e->ancestor_suspicious = 1;
         __builtin_memcpy(e->ancestor_filename, e->filename, sizeof(e->ancestor_filename));
@@ -344,11 +370,7 @@ int tp_schedexec(struct sched_process_exec_args *ctx) {
 // LSM enforcement hook
 
 SEC("lsm/bprm_check_security")
-int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm, int ret) {
-    if (ret != 0) {
-        // Already denied, don't override and return
-        return ret;
-    }
+int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     __u32 zero = 0;
     __u8 *enabled = bpf_map_lookup_elem(&enforcement_enabled, &zero);
@@ -356,24 +378,31 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm, int ret) {
         return 0;
     }
 
-    char path[PATH_BUF_SIZE] = {0};
-    //  bprm->filename is a kernel-space pointer at this point (not user memory). 
-   __u8 truncated = 0;
-    read_path(path, sizeof(path), bprm->filename, 0, &truncated);
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
+    if (!scratch) return 0;
+
+    char *path = scratch->primary; // Offloaded to map memory
+    __builtin_memset(path, 0, PATH_BUF_SIZE);
+
+    __u8 truncated = 0;
+    long n = read_path(path, PATH_BUF_SIZE, bprm->filename, 0, &truncated);
+    if (n <= 0) {
+        return 0; // Abort if reading the path failed
+    }
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
     if (blocked && *blocked == 1) {
         struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
             fill_common(e, EVT_EXEC_BLOCKED);
-            __builtin_memcpy(e->filename, path, sizeof(path));
+            __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
             e->ret = -1; 
             e->path_truncated = truncated;
 
             __u64 pid_tgid = bpf_get_current_pid_tgid();
-            struct exec_scratch *scratch = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
-            if (scratch) {
-                __builtin_memcpy(e->argv0, scratch->argv0, sizeof(e->argv0));
+            struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+            if (scratch2) {
+                __builtin_memcpy(e->argv0, scratch2->argv0, sizeof(e->argv0));
                 bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
             }
 
@@ -480,12 +509,12 @@ int tp_openat(struct syscall_openat_args *ctx) {
     // This change was implemented to mitigate the problem of us 
     // exceeding the BPF stack limit
     __u32 zero = 0;
-    struct path_scratch *scratch = bpf_map_lookup_elem(&path_scratch_map, &zero);
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
     if (!scratch) return 0;
     char *path = scratch->primary;
 
     __u8 truncated = 0;
-    long n = read_path(path, sizeof(path), ctx->filename, 1, &truncated);
+    long n = read_path(path, PATH_BUF_SIZE, ctx->filename, 1, &truncated);
     if (n <= 0) return 0;
 
     int write_intent = (ctx->flags & O_ACCMODE_MASK) == O_WRONLY_ ||
@@ -535,12 +564,12 @@ struct syscall_openat2_args {
 SEC("tracepoint/syscalls/sys_enter_openat2")
 int tp_openat2(struct syscall_openat2_args *ctx) {
     __u32 zero = 0;
-    struct path_scratch *scratch = bpf_map_lookup_elem(&path_scratch_map, &zero);
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
     if (!scratch) return 0;
     char *path = scratch->primary;
 
     __u8 truncated = 0;
-    long n = read_path(path, sizeof(path), ctx->filename, 1, &truncated);
+    long n = read_path(path, PATH_BUF_SIZE, ctx->filename, 1, &truncated);
     if (n <= 0) return 0;
 
     struct open_how_min how = {0};

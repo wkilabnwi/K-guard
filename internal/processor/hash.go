@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -20,14 +21,64 @@ type cachedHash struct {
 	size  int64
 }
 
-type HashCache struct {
-	mu    sync.RWMutex
-	items map[string]cachedHash
+type lruEntry struct {
+	key string
+	val cachedHash
 }
 
-var globalHashCache = &HashCache{
-	items: make(map[string]cachedHash),
+type HashCache struct {
+	mu       sync.Mutex
+	capacity int
+	items    map[string]*list.Element
+	evict    *list.List
 }
+
+func newHashCache(capacity int) *HashCache {
+	return &HashCache{
+		capacity: capacity,
+		items:    make(map[string]*list.Element),
+		evict:    list.New(),
+	}
+}
+
+// Get returns the cached entry and promotes it to the front of the LRU list
+func (c *HashCache) Get(key string) (cachedHash, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, exists := c.items[key]; exists {
+		c.evict.MoveToFront(elem)
+		return elem.Value.(*lruEntry).val, true
+	}
+	return cachedHash{}, false
+}
+
+// Put inserts or updates an entry, evicting the least recently used item if capacity is exceeded
+func (c *HashCache) Put(key string, val cachedHash) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, exists := c.items[key]; exists {
+		c.evict.MoveToFront(elem)
+		elem.Value.(*lruEntry).val = val
+		return
+	}
+
+	elem := c.evict.PushFront(&lruEntry{key: key, val: val})
+	c.items[key] = elem
+
+	// Evict oldest if capacity exceeded
+	if c.evict.Len() > c.capacity {
+		oldest := c.evict.Back()
+		if oldest != nil {
+			c.evict.Remove(oldest)
+			entry := oldest.Value.(*lruEntry)
+			delete(c.items, entry.key)
+		}
+	}
+}
+
+var globalHashCache = newHashCache(1000)
 
 type execHash struct {
 	pid      uint32
@@ -72,18 +123,13 @@ func (h *execHash) get() (string, error) {
 	}
 	inode, mtime, size, ok := statIdentity(fi)
 
-	globalHashCache.mu.RLock()
-	cached, exists := globalHashCache.items[resolvedPath]
-	globalHashCache.mu.RUnlock()
-
-	if exists && ok && cached.inode == inode && cached.mtime == mtime && cached.size == size {
+	// Check cache
+	if cached, exists := globalHashCache.Get(resolvedPath); exists && ok && cached.inode == inode && cached.mtime == mtime && cached.size == size {
 		h.hex = cached.hex
 		return h.hex, nil
 	}
 
-	// Cache miss, or stat id changed since we cached it, or we
-	// couldn't verify identity at all so we re-hash from disk rather than
-	// trust an entry that's possibly stale
+	// Cache miss or stat changed: compute hash from disk
 	f, err := os.Open(procPath)
 	if err != nil {
 		h.err = fmt.Errorf("opening %s: %w", procPath, err)
@@ -99,12 +145,12 @@ func (h *execHash) get() (string, error) {
 
 	computedHex := hex.EncodeToString(hasher.Sum(nil))
 
-	globalHashCache.mu.Lock()
-	if len(globalHashCache.items) > 1000 {
-		globalHashCache.items = make(map[string]cachedHash)
-	}
-	globalHashCache.items[resolvedPath] = cachedHash{hex: computedHex, inode: inode, mtime: mtime, size: size}
-	globalHashCache.mu.Unlock()
+	globalHashCache.Put(resolvedPath, cachedHash{
+		hex:   computedHex,
+		inode: inode,
+		mtime: mtime,
+		size:  size,
+	})
 
 	h.hex = computedHex
 	return h.hex, nil

@@ -40,16 +40,17 @@ type BPFKguardEvent struct {
 	_                  [6]byte
 }
 
-type BPFPathScratch struct {
-	Primary [256]int8
-	Walk    [256]int8
-}
-
 type BPFProcessLineage struct {
 	ParentPid          uint32
 	SuspiciousAncestor uint8
 	AncestorFilename   [256]int8
 	_                  [3]byte
+}
+
+type BPFScratchBuffer struct {
+	Primary [256]int8
+	Walk    [256]int8
+	Lin     BPFProcessLineage
 }
 
 // LoadBPF returns the embedded CollectionSpec for BPF.
@@ -114,8 +115,8 @@ type BPFMapSpecs struct {
 	EnforcementEnabled  *ebpf.MapSpec `ebpf:"enforcement_enabled"`
 	ExecScratchMap      *ebpf.MapSpec `ebpf:"exec_scratch_map"`
 	LineageMap          *ebpf.MapSpec `ebpf:"lineage_map"`
-	PathScratchMap      *ebpf.MapSpec `ebpf:"path_scratch_map"`
 	Rb                  *ebpf.MapSpec `ebpf:"rb"`
+	ScratchMap          *ebpf.MapSpec `ebpf:"scratch_map"`
 	SensitiveWritePaths *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
 	SuspiciousPaths     *ebpf.MapSpec `ebpf:"suspicious_paths"`
 }
@@ -143,8 +144,8 @@ type BPFMaps struct {
 	EnforcementEnabled  *ebpf.Map `ebpf:"enforcement_enabled"`
 	ExecScratchMap      *ebpf.Map `ebpf:"exec_scratch_map"`
 	LineageMap          *ebpf.Map `ebpf:"lineage_map"`
-	PathScratchMap      *ebpf.Map `ebpf:"path_scratch_map"`
 	Rb                  *ebpf.Map `ebpf:"rb"`
+	ScratchMap          *ebpf.Map `ebpf:"scratch_map"`
 	SensitiveWritePaths *ebpf.Map `ebpf:"sensitive_write_paths"`
 	SuspiciousPaths     *ebpf.Map `ebpf:"suspicious_paths"`
 }
@@ -155,8 +156,8 @@ func (m *BPFMaps) Close() error {
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
 		m.LineageMap,
-		m.PathScratchMap,
 		m.Rb,
+		m.ScratchMap,
 		m.SensitiveWritePaths,
 		m.SuspiciousPaths,
 	)
