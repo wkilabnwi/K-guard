@@ -41,11 +41,11 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     // clear the single word straddling ret
    #pragma unroll
-for (__u32 i = 0; i < 8; i++) {
-    __u32 idx = pathlen + i;
-    if (idx < word_start && idx < PATH_BUF_SIZE)
-        path[idx] = 0;
-}
+    for (__u32 i = 0; i < 8; i++) {
+        __u32 idx = pathlen + i;
+        if (idx < word_start && idx < PATH_BUF_SIZE)
+            path[idx] = 0;
+    }
 
     // clear every full word from word_start onward 
     __u64 *path64 = (__u64 *)path;
