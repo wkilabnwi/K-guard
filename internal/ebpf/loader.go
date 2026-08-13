@@ -3,6 +3,8 @@ package ebpf
 import (
 	"fmt"
 	"log"
+	"path/filepath"
+	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -154,11 +156,29 @@ func syncFixedPaths(em *ebpf.Map, paths []string) error {
 		return fmt.Errorf("iterating map: %w", err)
 	}
 
-	want := make(map[[256]byte]bool, len(paths))
+	want := make(map[[256]byte]bool, len(paths)*2)
 	for _, p := range paths {
-		var k [256]byte
-		copy(k[:], p)
-		want[k] = true
+		if p == "" {
+			continue
+		}
+
+		hasSlash := strings.HasSuffix(p, "/")
+		cleanP := filepath.Clean(p)
+		if hasSlash && !strings.HasSuffix(cleanP, "/") {
+			cleanP += "/"
+		}
+
+		want[pathToKey(cleanP)] = true
+
+		// Resolve symlinks for both binaries AND folders (/var/run/ - > /run/)
+		if realP, err := filepath.EvalSymlinks(p); err == nil {
+			if hasSlash && !strings.HasSuffix(realP, "/") {
+				realP += "/"
+			}
+			if realP != cleanP {
+				want[pathToKey(realP)] = true
+			}
+		}
 	}
 
 	for k := range existingSet {
@@ -167,6 +187,8 @@ func syncFixedPaths(em *ebpf.Map, paths []string) error {
 		}
 	}
 	for k := range want {
+		strKey := strings.TrimRight(string(k[:]), "\x00")
+		log.Printf("[DEBUG GO] Map Sync -> Pushing key: %q", strKey)
 		if !existingSet[k] {
 			if err := em.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
 				return fmt.Errorf("updating map: %w", err)
@@ -186,6 +208,12 @@ func (m *Manager) SyncSuspiciousPaths(paths []string) error {
 
 func (m *Manager) SyncSensitiveWritePaths(paths []string) error {
 	return syncFixedPaths(m.Objects.SensitiveWritePaths, paths)
+}
+
+func pathToKey(p string) [256]byte {
+	var k [256]byte
+	copy(k[:], p)
+	return k
 }
 
 func (m *Manager) Close() {
