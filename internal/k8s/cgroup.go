@@ -134,6 +134,10 @@ func ParseCgroupPath(cgroupPath string) (ContainerContext, bool) {
 			ctx.Runtime = "cri-o"
 		case strings.Contains(cgroupPath, "containerd"):
 			ctx.Runtime = "containerd"
+		case
+			strings.Contains(cgroupPath, "kubepods"),
+			strings.Contains(cgroupPath, "k8s"):
+			ctx.Runtime = "containerd"
 		default:
 			ctx.Runtime = "unknown"
 		}

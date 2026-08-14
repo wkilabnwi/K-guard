@@ -3,6 +3,8 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"k-guard/internal/config"
+	"log"
 	"sync"
 	"time"
 
@@ -32,7 +34,7 @@ type Resolver struct {
 	sf          singleflight.Group
 }
 
-func NewResolver(procPath string, sysCgroupPath string, kubeletURL string) *Resolver {
+func NewResolver(procPath, sysCgroupPath, kubeletURL string, kubeletInsecure bool, kubeletCertFile, kubeletKeyFile string) *Resolver {
 	if procPath == "" {
 		procPath = "/proc"
 	}
@@ -47,10 +49,18 @@ func NewResolver(procPath string, sysCgroupPath string, kubeletURL string) *Reso
 		cgroupPath:  sysCgroupPath,
 		cgroupCache: newLRUCache[uint64, ContainerContext](10000),
 		pidCache:    newLRUCache[uint32, ContainerContext](10000),
-		kubelet:     NewKubeletClient(kubeletURL, false),
+		kubelet:     NewKubeletClient(kubeletURL, kubeletInsecure, kubeletCertFile, kubeletKeyFile),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
+
+	// Perform a synchronous initial sync (with a quick 3s timeout)
+	// so the pod map is warm before any eBPF events hit the resolver
+	syncCtx, syncCancel := context.WithTimeout(r.ctx, 3*time.Second)
+	if err := r.kubelet.SyncPods(syncCtx); err != nil {
+		log.Printf("k8s: initial kubelet pod sync failed: %v; pod metadata cache starts empty", err)
+	}
+	syncCancel()
 
 	r.wg.Add(1)
 
@@ -72,11 +82,6 @@ func (r *Resolver) startKubeletSync(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Initial Sync
-	syncCtx, syncCancel := context.WithTimeout(r.ctx, 5*time.Second)
-	_ = r.kubelet.SyncPods(syncCtx)
-	syncCancel()
-
 	for {
 		select {
 		case <-ticker.C:
@@ -89,19 +94,31 @@ func (r *Resolver) startKubeletSync(interval time.Duration) {
 	}
 }
 
-// Resolve fetches K8s container metadata
+// Resolve fetches k8s container metadata
 func (r *Resolver) Resolve(cgroupID uint64, pid uint32) (ContainerContext, bool) {
 	// Check CGroupID LRU Cache
 	if cgroupID != 0 {
 		if ctx, ok := r.cgroupCache.Get(cgroupID); ok {
-			return r.enrichContext(ctx), true
+			if ctx.PodName == "" || ctx.Namespace == "" {
+				ctx = r.enrichContext(ctx)
+				if ctx.PodName != "" && ctx.Namespace != "" {
+					r.cgroupCache.Add(cgroupID, ctx)
+				}
+			}
+			return ctx, true
 		}
 	}
 
 	// Check PID LRU Cache
 	if pid != 0 {
 		if ctx, ok := r.pidCache.Get(pid); ok {
-			return r.enrichContext(ctx), true
+			if ctx.PodName == "" || ctx.Namespace == "" {
+				ctx = r.enrichContext(ctx)
+				if ctx.PodName != "" && ctx.Namespace != "" {
+					r.pidCache.Add(pid, ctx)
+				}
+			}
+			return ctx, true
 		}
 	}
 
@@ -144,11 +161,13 @@ func (r *Resolver) doResolve(cgroupID uint64, pid uint32) (ContainerContext, boo
 	ctx.ResolvedAt = time.Now()
 	ctx = r.enrichContext(ctx)
 
-	if cgroupID != 0 {
-		r.cgroupCache.Add(cgroupID, ctx)
-	}
-	if pid != 0 {
-		r.pidCache.Add(pid, ctx)
+	if ctx.PodName != "" && ctx.Namespace != "" {
+		if cgroupID != 0 {
+			r.cgroupCache.Add(cgroupID, ctx)
+		}
+		if pid != 0 {
+			r.pidCache.Add(pid, ctx)
+		}
 	}
 
 	return ctx, true
@@ -159,7 +178,32 @@ func (r *Resolver) enrichContext(ctx ContainerContext) ContainerContext {
 		if name, ns, ok := r.kubelet.Lookup(ctx.PodUID); ok {
 			ctx.PodName = name
 			ctx.Namespace = ns
+
+		}
+	}
+
+	// we check anyway to enrich whatever could have been missed by the first one
+	if ctx.ContainerID != "" {
+		if name, ns, podUID, runtime, ok := r.kubelet.LookupByContainerID(ctx.ContainerID); ok {
+			if ctx.PodName == "" {
+				ctx.PodName = name
+			}
+			if ctx.Namespace == "" {
+				ctx.Namespace = ns
+			}
+			if ctx.PodUID == "" {
+				ctx.PodUID = podUID
+			}
+			if ctx.Runtime == "" || ctx.Runtime == "unknown" {
+				ctx.Runtime = runtime
+			}
 		}
 	}
 	return ctx
+}
+
+func (r *Resolver) UpdateConfig(c *config.Config) {
+	if r.kubelet != nil {
+		r.kubelet.UpdateConfig(c)
+	}
 }

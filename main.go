@@ -18,6 +18,7 @@ import (
 	"k-guard/internal/config"
 	"k-guard/internal/dashboard"
 	kebpf "k-guard/internal/ebpf"
+	k8s "k-guard/internal/k8s"
 	"k-guard/internal/metrics"
 	"k-guard/internal/processor"
 	"k-guard/internal/safety"
@@ -59,6 +60,11 @@ func main() {
 
 	// Wire up alert sinks based on config
 	cfg := cfgMgr.Current()
+
+	// Wire up thek8s resolver
+	k8sResolver := k8s.NewResolver(cfg.ProcPath, cfg.CgroupPath, cfg.KubeletURL, cfg.KubeletInsecure, cfg.KubeletCertFile, cfg.KubeletKeyFile)
+	defer k8sResolver.Close()
+
 	if cfg.Sinks.Stdout {
 		dispatcher.Register(alert.StdoutSink{})
 	}
@@ -102,7 +108,7 @@ func main() {
 		}
 	}
 
-	engine := processor.NewEngine(cfgMgr, guard, dispatcher, metricsRegistry, mgr)
+	engine := processor.NewEngine(cfgMgr, guard, dispatcher, metricsRegistry, mgr, k8sResolver)
 	router := processor.NewRouter(engine, metricsRegistry, cfgMgr)
 
 	quit := make(chan bool)

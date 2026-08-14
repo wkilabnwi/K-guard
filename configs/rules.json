@@ -8,6 +8,13 @@
       "action": "BLOCK"
     },
     {
+      "name": "Test env block",
+      "match": "exact_path",
+      "pattern": "/bin/env",
+      "severity": "critical",
+      "action": "BLOCK"
+    },
+    {
       "name": "Reverse shell (nc) from suspicious path, detect+kill",
       "match": "basename",
       "pattern": "nc",
@@ -52,14 +59,23 @@
     "/usr/sbin/tcpdump"
   ],
 
+  "kubelet_url": "https://127.0.0.1:10250",
+  "kubelet_insecure": true,
+  "proc_path": "/proc",
+  "cgroup_path": "/sys/fs/cgroup",
+  "kubelet_cert_file": "/var/lib/rancher/k3s/server/tls/client-admin.crt",
+  "kubelet_key_file": "/var/lib/rancher/k3s/server/tls/client-admin.key",
+
   "protected_pids": [],
   "protected_comms": ["sshd", "systemd", "systemd-journald"],
   "suspicious_path": ["/testkill/", "/tmp/"],
-  "ignored_connect_comms": ["sshd", "docker"],
+  "ignored_connect_comms": ["sshd", "docker", "k3s-server"],
   "sensitive_write_paths": ["/tmp/"],
 
   "enforcement_enabled": true,
   "dedup_window_seconds": 10,
+
+
 
   "sinks": {
     "stdout": true,

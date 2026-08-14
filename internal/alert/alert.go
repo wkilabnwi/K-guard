@@ -45,6 +45,13 @@ type Alert struct {
 	// ResponseErr records why an intended KILL action didn't happen, kept on the alert itself so it
 	// shows up in the store/dashboard rather than only in logs.
 	ResponseErr string `json:"response_error,omitempty"`
+
+	// k8s specific fields
+	ContainerID string `json:"container_id,omitempty"`
+	PodName     string `json:"pod_name,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+	PodUID      string `json:"pod_uid,omitempty"`
+	Runtime     string `json:"runtime,omitempty"`
 }
 
 // Sink is anything that can receive alerts. DElivery became async because

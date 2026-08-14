@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"k-guard/internal/config"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -20,35 +22,62 @@ type podList struct {
 			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
 		} `json:"metadata"`
+		Status struct {
+			ContainerStatuses []struct {
+				ContainerID string `json:"containerID"`
+			} `json:"containerStatuses"`
+			InitContainerStatuses []struct {
+				ContainerID string `json:"containerID"`
+			} `json:"initContainerStatuses"`
+			EphemeralContainerStatuses []struct {
+				ContainerID string `json:"containerID"`
+			} `json:"ephemeralContainerStatuses"`
+		} `json:"status"`
 	} `json:"items"`
 }
 
 // KubeletClient provides access to the local Kubelet API for
 // syncing and looking up Kubernetes Pod metadata
 type KubeletClient struct {
-	client     *http.Client
-	baseURL    string
-	mu         sync.RWMutex
-	podMetaMap map[string]struct{ Name, Namespace string }
+	client            *http.Client
+	baseURL           string
+	certFile          string
+	keyFile           string
+	mu                sync.RWMutex
+	podMetaMap        map[string]struct{ Name, Namespace string }
+	containerToPodMap map[string]struct{ Name, Namespace, PodUID, Runtime string }
 }
 
 // NewKubeletClient initializes client for the local Kubelet API
-func NewKubeletClient(baseURL string, insecureSkipTLS bool) *KubeletClient {
+func NewKubeletClient(baseURL string, insecureSkipTLS bool, certFile, keyFile string) *KubeletClient {
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:10255"
 	}
 
 	tr := &http.Transport{}
 	if strings.HasPrefix(strings.ToLower(baseURL), "https://") {
-		tr.TLSClientConfig = &tls.Config{
+		tlsConfig := &tls.Config{
 			InsecureSkipVerify: insecureSkipTLS,
 		}
+
+		if certFile != "" && keyFile != "" {
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				log.Printf("k8s: failed to load kubelet client cert (%s, %s): %v; "+
+					"proceeding without client cert, kubelet requests may be rejected", certFile, keyFile, err)
+			} else {
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+		}
+
+		tr.TLSClientConfig = tlsConfig
 	}
 
 	return &KubeletClient{
-		client:     &http.Client{Timeout: 5 * time.Second, Transport: tr},
-		baseURL:    baseURL,
-		podMetaMap: make(map[string]struct{ Name, Namespace string }),
+		client:            &http.Client{Timeout: 5 * time.Second, Transport: tr},
+		baseURL:           baseURL,
+		podMetaMap:        make(map[string]struct{ Name, Namespace string }),
+		containerToPodMap: make(map[string]struct{ Name, Namespace, PodUID, Runtime string }),
 	}
 }
 
@@ -79,16 +108,49 @@ func (k *KubeletClient) SyncPods(ctx context.Context) error {
 		return err
 	}
 
-	newMap := make(map[string]struct{ Name, Namespace string })
+	newPodMap := make(map[string]struct{ Name, Namespace string })
+	newContainerMap := make(map[string]struct{ Name, Namespace, PodUID, Runtime string })
+
 	for _, p := range pods.Items {
-		newMap[p.Metadata.UID] = struct{ Name, Namespace string }{
+		podUID := p.Metadata.UID
+		podInfo := struct{ Name, Namespace string }{
 			Name:      p.Metadata.Name,
 			Namespace: p.Metadata.Namespace,
+		}
+		newPodMap[podUID] = podInfo
+
+		indexContainer := func(rawID string) {
+			if rawID == "" {
+				return
+			}
+			cleanID := rawID
+			runtime := "unknown"
+			if idx := strings.Index(rawID, "://"); idx != -1 {
+				runtime = rawID[:idx]
+				cleanID = rawID[idx+3:]
+			}
+			newContainerMap[cleanID] = struct{ Name, Namespace, PodUID, Runtime string }{
+				Name:      p.Metadata.Name,
+				Namespace: p.Metadata.Namespace,
+				PodUID:    podUID,
+				Runtime:   runtime,
+			}
+		}
+
+		for _, c := range p.Status.ContainerStatuses {
+			indexContainer(c.ContainerID)
+		}
+		for _, c := range p.Status.InitContainerStatuses {
+			indexContainer(c.ContainerID)
+		}
+		for _, c := range p.Status.EphemeralContainerStatuses {
+			indexContainer(c.ContainerID)
 		}
 	}
 
 	k.mu.Lock()
-	k.podMetaMap = newMap
+	k.podMetaMap = newPodMap
+	k.containerToPodMap = newContainerMap
 	k.mu.Unlock()
 
 	return nil
@@ -102,4 +164,46 @@ func (k *KubeletClient) Lookup(podUID string) (string, string, bool) {
 		return "", "", false
 	}
 	return meta.Name, meta.Namespace, true
+}
+
+func (k *KubeletClient) LookupByContainerID(containerID string) (string, string, string, string, bool) {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+
+	meta, ok := k.containerToPodMap[containerID]
+	if !ok {
+		return "", "", "", "", false
+	}
+	return meta.Name, meta.Namespace, meta.PodUID, meta.Runtime, true
+}
+
+func (k *KubeletClient) UpdateConfig(c *config.Config) {
+	baseURL := c.KubeletURL
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:10255"
+	}
+
+	tr := &http.Transport{}
+	if strings.HasPrefix(strings.ToLower(baseURL), "https://") {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: c.KubeletInsecure,
+		}
+
+		if c.KubeletCertFile != "" && c.KubeletKeyFile != "" {
+			cert, err := tls.LoadX509KeyPair(c.KubeletCertFile, c.KubeletKeyFile)
+			if err != nil {
+				log.Printf("k8s: failed to load kubelet client cert on reload (%s, %s): %v; "+
+					"proceeding without client cert", c.KubeletCertFile, c.KubeletKeyFile, err)
+			} else {
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+		}
+
+		tr.TLSClientConfig = tlsConfig
+	}
+
+	k.mu.Lock()
+	k.baseURL = baseURL
+	k.client.Transport = tr
+	k.mu.Unlock()
 }

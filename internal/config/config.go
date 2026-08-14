@@ -67,7 +67,7 @@ func (m *Manager) OnChange(fn func(*Config)) {
 	m.subscribers = append(m.subscribers, fn)
 }
 
-// ReloadNow re-reads the config file immediately, On failure, the previously loaded config is
+// ReloadNow rereads the config file immediately, On failure, the previously loaded config is
 // left untouched and the error is returned for the caller to log.
 func (m *Manager) ReloadNow() error {
 	c, err := Load(m.path)

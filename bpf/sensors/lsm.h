@@ -11,7 +11,6 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
     __u32 zero = 0;
     __u8 *enabled = bpf_map_lookup_elem(&enforcement_enabled, &zero);
 
-    bpf_printk("LSM [1]: Hook fired! enabled_ptr=%p val=%d", enabled, enabled ? *enabled : 0);
 
     if (!enabled || *enabled == 0) {
         return 0;

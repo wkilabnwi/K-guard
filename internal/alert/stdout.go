@@ -19,6 +19,11 @@ func (StdoutSink) Send(a Alert) {
 	if a.Filename != "" {
 		fmt.Printf("   | Path: %s\n", a.Filename)
 	}
+
+	if a.PodName != "" {
+		fmt.Printf("   | K8s: %s/%s (container: %s, runtime: %s)\n",
+			a.Namespace, a.PodName, a.ContainerID[:12], a.Runtime)
+	}
 	if a.AncestorSuspicious {
 		if a.Filename != a.AncestorFilename {
 			fmt.Printf("   | Ancestor: %s [SUSPICIOUS LINEAGE]\n", a.AncestorFilename)

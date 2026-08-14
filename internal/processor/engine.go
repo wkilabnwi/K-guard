@@ -10,6 +10,7 @@ import (
 	"k-guard/internal/alert"
 	"k-guard/internal/config"
 	"k-guard/internal/ebpf"
+	k8s "k-guard/internal/k8s"
 	"k-guard/internal/metrics"
 	"k-guard/internal/safety"
 )
@@ -21,25 +22,28 @@ type Engine struct {
 	metrics    *metrics.Registry
 	ebpfMgr    *ebpf.Manager
 
-	dedup      *Deduper
-	correlator *Correlator
+	dedup       *Deduper
+	correlator  *Correlator
+	k8sresolver *k8s.Resolver
 }
 
-func NewEngine(cfg *config.Manager, guard *safety.Guard, dispatcher *alert.Dispatcher, m *metrics.Registry, mgr *ebpf.Manager) *Engine {
+func NewEngine(cfg *config.Manager, guard *safety.Guard, dispatcher *alert.Dispatcher, m *metrics.Registry, mgr *ebpf.Manager, k8sResolver *k8s.Resolver) *Engine {
 	e := &Engine{
-		cfg:        cfg,
-		guard:      guard,
-		dispatcher: dispatcher,
-		metrics:    m,
-		ebpfMgr:    mgr,
-		dedup:      NewDeduper(time.Duration(cfg.Current().DedupWindowSeconds) * time.Second),
-		correlator: NewCorrelator(10 * time.Second),
+		cfg:         cfg,
+		guard:       guard,
+		dispatcher:  dispatcher,
+		metrics:     m,
+		ebpfMgr:     mgr,
+		dedup:       NewDeduper(time.Duration(cfg.Current().DedupWindowSeconds) * time.Second),
+		correlator:  NewCorrelator(10 * time.Second),
+		k8sresolver: k8sResolver,
 	}
 
 	// Apply the initial config, then keep re-applying on every hot reload
 	e.applyConfig(cfg.Current())
 	cfg.OnChange(e.applyConfig)
 
+	cfg.OnChange(k8sResolver.UpdateConfig)
 	return e
 }
 
@@ -132,13 +136,16 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		if pathTruncated {
 			detail = "path truncated during read, match against blocked_paths may be unreliable"
 		}
-		e.dispatcher.Dispatch(alert.Alert{
-			Timestamp: time.Now(), Severity: string(config.SeverityCritical), Action: string(config.ActionBlock),
+
+		a := alert.Alert{
+			Severity: string(config.SeverityCritical), Action: string(config.ActionBlock),
 			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
 			CgroupID: cgroupID, Filename: filename, Argv0: argv0,
 			AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 			PathTruncated: pathTruncated, Detail: detail,
-		})
+		}
+
+		e.dispatcher.Dispatch(e.enrichAlert(a))
 		return
 	}
 
@@ -171,7 +178,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		}
 
 		a := alert.Alert{
-			Timestamp: time.Now(), RuleName: r.Name, Severity: string(r.Severity), Action: string(r.Action),
+			RuleName: r.Name, Severity: string(r.Severity), Action: string(r.Action),
 			EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 			Filename: filename, Argv0: argv0, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 			PathTruncated: pathTruncated, Detail: detail,
@@ -191,7 +198,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			}
 		}
 
-		e.dispatcher.Dispatch(a)
+		e.dispatcher.Dispatch(e.enrichAlert(a))
 	}
 }
 
@@ -216,11 +223,13 @@ func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupI
 		}
 	}
 
-	e.dispatcher.Dispatch(alert.Alert{
-		Timestamp: time.Now(), Severity: string(sev), Action: string(config.ActionAlert),
+	a := alert.Alert{
+		Severity: string(sev), Action: string(config.ActionAlert),
 		EventType: "CONNECT", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 		DestIP: destIP, DestPort: destPort, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-	})
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
 // AnalyzeGeneric handles every other sensor type with a shared, simple severity
@@ -253,10 +262,32 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 		detail += "path truncated during read, manual check the full path"
 	}
 
-	e.dispatcher.Dispatch(alert.Alert{
-		Timestamp: time.Now(), Severity: string(sev), Action: string(config.ActionAlert),
+	a := alert.Alert{
+		Severity: string(sev), Action: string(config.ActionAlert),
 		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 		Filename: filename, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 		PathTruncated: pathTruncated,
-	})
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+// enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
+// at the next refactor this function will do the work of enriching all alerts not only the k8s context
+func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {
+	if a.Timestamp.IsZero() {
+		a.Timestamp = time.Now()
+	}
+
+	if e.k8sresolver != nil {
+		if ctx, ok := e.k8sresolver.Resolve(a.CgroupID, a.Pid); ok {
+			a.ContainerID = ctx.ContainerID
+			a.PodName = ctx.PodName
+			a.Namespace = ctx.Namespace
+			a.PodUID = ctx.PodUID
+			a.Runtime = ctx.Runtime
+		}
+	}
+
+	return a
 }

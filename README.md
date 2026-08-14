@@ -84,6 +84,13 @@ Example config:
   "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
 
   "ignored_connect_comms": ["docker"],
+
+  "proc_path": "/proc",
+  "cgroup_path": "/sys/fs/cgroup",
+  "kubelet_url": "https://127.0.0.1:10250",
+  "kubelet_insecure": false,
+  "kubelet_cert_file": "/var/lib/rancher/k8s/server/tls/client-admin.crt",
+  "kubelet_key_file": "/var/lib/rancher/k8s/server/tls/client-admin.key",
   
   "sinks": {
     "stdout": true,
@@ -112,6 +119,48 @@ background/tunnel noise rather than signal worth alerting on.
 When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
 - **Cross-PID In-Memory Cache**: Hashes are resolved to their canonical disk path and cached in a thread-safe in-memory cache. If multiple processes (across hundreds of PIDs) execute the same binary, only the first process triggers disk I/O, subsequent checks hit RAM instantly.
+
+## Kubernetes context enrichment
+ 
+When running on a Kubernetes node, K-Guard resolves each alert's cgroup
+back to the owning Pod/container and attaches that context before
+dispatch. Resolution works even if the process has already exited by
+the time enrichment runs:
+ 
+1. The originating cgroup path is read from `/proc/<pid>/cgroup`. If the
+   PID is already dead, K-Guard falls back to walking `cgroup_path`
+   looking for a directory whose inode matches the eBPF-reported cgroup
+   ID.
+2. The cgroup path is parsed (systemd scope naming, cgroupfs raw hex IDs,
+   and pod-UID directory naming are all recognized) to extract a
+   container ID, container runtime, and/or Pod UID.
+3. That's cross-referenced against a local cache of the Kubelet's `/pods`
+   API to resolve the Pod name and namespace.
+Enriched alerts carry `container_id`, `pod_name`, `namespace`,
+`pod_uid`, and `runtime` fields whenever resolution succeeds; alerts
+from non-Kubernetes processes (or ones K-Guard can't resolve) are
+dispatched with those fields empty rather than being held back.
+ 
+Configure it via these optional top-level config keys:
+ 
+| Key | Default | Notes |
+|---|---|---|
+| `proc_path` | `/proc` | override for containerized/chrooted K-Guard deployments |
+| `cgroup_path` | `/sys/fs/cgroup` | |
+| `kubelet_url` | `http://127.0.0.1:10255` | the Kubelet's read-only or authenticated API |
+| `kubelet_insecure` | `false` | skip TLS certificate verification; not recommended outside of testing |
+| `kubelet_cert_file` / `kubelet_key_file` | unset | client cert/key pair for mTLS against an HTTPS Kubelet endpoint. Must both be set together, or both left unset. On k8s these are typically `/var/lib/rancher/k8s/server/tls/client-admin.crt` / `.key`; other distributions will have a different client-cert location or may use a bearer token instead |
+ 
+Resolved pod/container metadata is cached (LRU, keyed by cgroup ID and
+PID) so repeat lookups for the same process don't hit the Kubelet API on
+every event. The Kubelet's pod list itself is refreshed on a 30-second
+background sync, plus once synchronously (3s timeout) at startup so the
+cache is warm before the first eBPF events arrive.
+ 
+> **Note:** the K8s keys (`proc_path`, `cgroup_path`,
+> `kubelet_insecure`) are read once at startup.
+> so unlike `kubelet_cert_file`, `kubelet_key_file`, `kubelet_url`.
+> which are hot-reloadable, the first three aren't.
 
 ## Alert sinks
 

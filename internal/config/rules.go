@@ -120,6 +120,14 @@ type Config struct {
 	IgnoredConnectComms []string `json:"ignored_connect_comms,omitempty"`
 
 	SensitiveWritePaths []string `json:"sensitive_write_paths,omitempty"`
+
+	// K8s specific
+	KubeletURL      string `json:"kubelet_url,omitempty"`
+	ProcPath        string `json:"proc_path,omitempty"`
+	CgroupPath      string `json:"cgroup_path,omitempty"`
+	KubeletInsecure bool   `json:"kubelet_insecure,omitempty"`
+	KubeletCertFile string `json:"kubelet_cert_file,omitempty"`
+	KubeletKeyFile  string `json:"kubelet_key_file,omitempty"`
 }
 
 func (c *Config) applyDefaults() {
@@ -145,6 +153,10 @@ func (c *Config) Validate() error {
 	}
 	if c.DedupWindowSeconds < 0 {
 		return fmt.Errorf("dedup_window_seconds must be >= 0")
+	}
+
+	if (c.KubeletCertFile == "") != (c.KubeletKeyFile == "") {
+		return fmt.Errorf("kubelet_cert_file and kubelet_key_file must both be set or both be empty")
 	}
 	return nil
 }
