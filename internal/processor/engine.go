@@ -123,8 +123,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 	cfg := e.cfg.Current()
 	h := &execHash{pid: pid}
 
-	suspicious := isSuspiciousPath(filename, cfg.SuspiciousPaths)
-	e.correlator.RecordExec(pid, filename, suspicious)
+	e.correlator.RecordExec(pid, ppid, comm, filename)
 
 	if isAllowlisted(cfg, filename) {
 		return // explicitly trusted
@@ -215,12 +214,6 @@ func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupI
 	// Check kernel-emitted lineage
 	if ancestorSuspicious {
 		sev = config.SeverityCritical
-		if comm == filepath.Base(ancestorFilename) {
-			detail = "forked process with suspicious ancestor: " + ancestorFilename
-
-		} else {
-			detail = "suspicious ancestor: " + ancestorFilename
-		}
 	}
 
 	a := alert.Alert{
@@ -243,15 +236,6 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 	sev := defaultSeverity
 	if ancestorSuspicious {
 		sev = config.SeverityCritical
-		if detail != "" {
-			detail += " | "
-		}
-		if filename != "" && filename == ancestorFilename {
-			detail += "forked process with suspicious ancestor: " + ancestorFilename
-
-		} else {
-			detail += "suspicious ancestor: " + ancestorFilename
-		}
 	}
 
 	if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
@@ -277,6 +261,10 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {
 	if a.Timestamp.IsZero() {
 		a.Timestamp = time.Now()
+	}
+
+	if a.AncestorSuspicious && e.correlator != nil {
+		a.LineageTree = e.correlator.FormatTree(a.Pid)
 	}
 
 	if e.k8sresolver != nil {

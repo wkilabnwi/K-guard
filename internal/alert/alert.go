@@ -37,6 +37,7 @@ type Alert struct {
 	// Lineage fields
 	AncestorSuspicious bool   `json:"ancestor_suspicious,omitempty"`
 	AncestorFilename   string `json:"ancestor_filename,omitempty"`
+	LineageTree        string `json:"lineage_tree,omitempty"`
 
 	// Free form extra detail
 	Detail        string `json:"detail,omitempty"`

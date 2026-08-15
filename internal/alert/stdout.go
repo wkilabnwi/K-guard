@@ -25,7 +25,9 @@ func (StdoutSink) Send(a Alert) {
 			a.Namespace, a.PodName, a.ContainerID[:12], a.Runtime)
 	}
 	if a.AncestorSuspicious {
-		if a.Filename != a.AncestorFilename {
+		if a.LineageTree != "" {
+			fmt.Printf("   | [SUSPICIOUS LINEAGE] Trace:%s\n", a.LineageTree)
+		} else if a.Filename != a.AncestorFilename {
 			fmt.Printf("   | Ancestor: %s [SUSPICIOUS LINEAGE]\n", a.AncestorFilename)
 		}
 	}

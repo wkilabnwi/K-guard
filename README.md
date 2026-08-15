@@ -107,7 +107,7 @@ Duplicate alerts for the same `(rule, pid)` (or `(connect, pid, dest_ip)`,
 or `(event_type, pid)` for the generic sensors) within
 `dedup_window_seconds` are suppressed after the first.
 
-Kernel-Level Lineage Tracking: Rather than relying on userspace lookups or race-prone time windows, K-Guard tracks process execution trees inside eBPF maps. When a binary originating from a path in `suspicious_paths` executes, eBPF flags its process tree context. Any subsequent actions, including file accesses (`OPEN_SENSITIVE`) or outbound socket connections (`CONNECT`), by that process or any of its child/forked processes automatically inherit this context, tag the alert with `[SUSPICIOUS LINEAGE]`, and escalate the severity to `CRITICAL`.
+Kernel Lineage & Tree Traceback : eBPF tracks context across child forks while an LRU cache walks `pid` $\rightarrow$ `ppid` entries to reconstruct the full process execution tree on alert.
 
 Outbound connects from processes listed in `ignored_connect_comms`
 (e.g. `["sshd"]`) are filtered before reaching the engine at all, as are
@@ -164,7 +164,7 @@ cache is warm before the first eBPF events arrive.
 
 ## Alert sinks
 
-- **stdout** : human-readable, multi-line per alert. Promotes lineage-flagged events to `[SECURITY]` and outputs the `Ancestor` binary path along with forked process context.
+- **stdout** : human-readable, multi-line per alert. Promotes lineage-flagged events, and renders visual (`Process Lineage Trace`) showing root ancestors and parent chains.
 - **syslog** : JSON body, severity mapped to a syslog level
 - **webhook** : POSTs `{ "text": <summary>, "alert": <Alert> }` as JSON
 - **store** : append-only, date-rotated JSON-Lines files; backs the
