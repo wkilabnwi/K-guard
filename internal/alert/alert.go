@@ -29,7 +29,7 @@ type Alert struct {
 	CgroupID uint64 `json:"cgroup_id,omitempty"`
 
 	Filename string `json:"filename,omitempty"`
-	Argv0    string `json:"argv0,omitempty"`
+	Args     string `json:"args,omitempty"`
 
 	DestIP   string `json:"dest_ip,omitempty"`
 	DestPort uint16 `json:"dest_port,omitempty"`

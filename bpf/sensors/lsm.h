@@ -61,17 +61,16 @@ for (__u32 i = 0; i < (PATH_BUF_SIZE / 8); i++) {
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
 
     if (blocked && *blocked == 1) {
-        struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+        struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
-            fill_common(e, EVT_EXEC_BLOCKED);
+            fill_common(&e->hdr, EVT_EXEC_BLOCKED);
             __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
-            e->ret = -1; 
             e->path_truncated = truncated;
 
             __u64 pid_tgid = bpf_get_current_pid_tgid();
             struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
             if (scratch2) {
-                __builtin_memcpy(e->argv0, scratch2->argv0, sizeof(e->argv0));
+                __builtin_memcpy(e->args, scratch2->args, sizeof(e->args));
                 bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
             }
 

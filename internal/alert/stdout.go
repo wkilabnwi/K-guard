@@ -31,8 +31,8 @@ func (StdoutSink) Send(a Alert) {
 			fmt.Printf("   | Ancestor: %s [SUSPICIOUS LINEAGE]\n", a.AncestorFilename)
 		}
 	}
-	if a.Argv0 != "" {
-		fmt.Printf("   | Argv0: %s\n", a.Argv0)
+	if a.Args != "" {
+		fmt.Printf("   | Args: %s\n", a.Args)
 	}
 	if a.DestIP != "" {
 		fmt.Printf("   | Dest: %s:%d\n", a.DestIP, a.DestPort)

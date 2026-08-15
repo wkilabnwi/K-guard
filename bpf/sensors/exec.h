@@ -1,6 +1,8 @@
 #ifndef __KGUARD_SENSORS_EXEC_H
 #define __KGUARD_SENSORS_EXEC_H
 
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 #include "../maps.h"
 #include "../types.h"
 #include "../helpers.h"
@@ -20,16 +22,6 @@ struct syscall_execve_args {
 
 SEC("tracepoint/syscalls/sys_enter_execve")
 int tp_execve(struct syscall_execve_args *ctx) {
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-
-    struct exec_scratch scratch = {};
-
-    const char *argv0_ptr = 0;
-    bpf_probe_read_user(&argv0_ptr , sizeof(argv0_ptr), &ctx->argv[0]);
-    if (argv0_ptr)
-        bpf_probe_read_user_str(&scratch.argv0, sizeof(scratch.argv0), argv0_ptr);
-
-    bpf_map_update_elem(&exec_scratch_map, &pid_tgid, &scratch, BPF_ANY);
     return 0;
 }
 
@@ -83,9 +75,15 @@ struct sched_process_exec_args {
 
 SEC("tracepoint/sched/sched_process_exec")
 int tp_schedexec(struct sched_process_exec_args *ctx) {
+
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 pid = (__u32)(pid_tgid >> 32);
+
+
     __u32 zero = 0;
     struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
-    if (!scratch) return 0;
+    if (!scratch) {
+         return 0; }
 
     char *filename = scratch->primary; // Offloaded to map memory
     __builtin_memset(filename, 0, PATH_BUF_SIZE);
@@ -99,43 +97,59 @@ int tp_schedexec(struct sched_process_exec_args *ctx) {
         return 0; // Abort if reading path failed
     }
 
-    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) return 0;
 
-    fill_common(e, EVT_EXEC);
+    struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        
+        return 0; }
+
+    fill_common(&e->hdr, EVT_EXEC);
 
     __builtin_memcpy(e->filename, filename, sizeof(e->filename));
     e->path_truncated = truncated;
 
-    // We actually populate the argv0, if nothing is there it got
-    // zeroed out by fill_common so we wouldn't leak stale data
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
-    if (scratch2) {
-        __builtin_memcpy(e->argv0, scratch2->argv0, sizeof(e->argv0));
-        bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
-    }
+    // We actually populate the args buffer and this time
+    // we do it the right way
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    struct mm_struct *mm = BPF_CORE_READ(task, mm);
+        if (mm) {
+            unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
+            unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
+            unsigned long len = arg_end - arg_start;
+
+            if (len > 0) {
+                if (len > sizeof(e->args) - 2) {
+                    len = sizeof(e->args) - 2;
+                }
+
+                if (bpf_probe_read_user(e->args, len, (const void *)arg_start) == 0) {
+                    e->args[len] = 0x00;
+                    e->args[len + 1] = 0x00;
+                }
+            }
+        }
 
     if (path_in_map(e->filename, &suspicious_paths)) {
-        struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->pid);
+        struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->hdr.pid);
         struct process_lineage *updated_lin = &scratch->lin; // Offloaded to map memory
         __builtin_memset(updated_lin, 0, sizeof(*updated_lin));
 
         if (lin) {
             *updated_lin = *lin;
         } else {
-            updated_lin->parent_pid = e->ppid;
+            updated_lin->parent_pid = e->hdr.ppid;
         }
 
         updated_lin->suspicious_ancestor = 1;
         __builtin_memcpy(updated_lin->ancestor_filename, e->filename, sizeof(updated_lin->ancestor_filename));
-        bpf_map_update_elem(&lineage_map, &e->pid, updated_lin, BPF_ANY);
+        bpf_map_update_elem(&lineage_map, &e->hdr.pid, updated_lin, BPF_ANY);
 
-        e->ancestor_suspicious = 1;
-        __builtin_memcpy(e->ancestor_filename, e->filename, sizeof(e->ancestor_filename));
+        e->hdr.ancestor_suspicious = 1;
+        __builtin_memcpy(e->hdr.ancestor_filename, e->filename, sizeof(e->hdr.ancestor_filename));
     }
 
     bpf_ringbuf_submit(e, 0);
+
     return 0;
 }
 

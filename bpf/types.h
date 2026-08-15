@@ -21,40 +21,55 @@
 
 #define PATH_BUF_SIZE 256
 
-struct kguard_event {
+#define MAX_ARGS 12
+
+struct event_hdr {
     __u64 timestamp_ns;
     __u32 pid;
-    __u32 ppid;     
+    __u32 ppid;
     __u32 uid;
     __u32 gid;
     __u64 cgroup_id;
     __u32 event_type;
-    __s32 ret;       
-    char comm[16];
-    char filename[PATH_BUF_SIZE];
-    char argv0[64];  
-
-    // connect specific args
-    __u32 daddr;     
-    __u8  daddr6[16];
-    __u16 dport;     
-    __u16 family;    
-    char  unix_path[108]; 
-
-    // openat specific args
-    __u32 write_fd;
-    __u64 write_count;
-    char  write_buf[64]; // Preview payload
-
-    // lineage fields
+    char  comm[16];
+    
+    // Lineage fields
     __u8  ancestor_suspicious;
     char  ancestor_filename[PATH_BUF_SIZE];
 
-    // saved for truncated paths
-    __u8  path_truncated; 
+    // this is used for a couple of things
+    // will definetely make it right today or
+    // tomorrow (or until it breaks)
+     __s32 ret;
+
 };
 
-struct kguard_event *unused_event __attribute__((unused));
+struct exec_event {
+    struct event_hdr hdr;
+    char filename[PATH_BUF_SIZE];
+    char args[256];
+    __u8 path_truncated;
+};
+
+struct connect_event {
+    struct event_hdr hdr;
+    __u32 daddr;
+    __u8  daddr6[16];
+    __u16 dport;
+    __u16 family;
+    char  unix_path[108];
+};
+
+struct open_event {
+    struct event_hdr hdr;
+    char filename[PATH_BUF_SIZE];
+    __u8 path_truncated;
+};
+
+struct event_hdr *unused_event_hdr __attribute__((unused));
+struct exec_event *unused_exec_event __attribute__((unused));
+struct connect_event *unused_connect_event __attribute__((unused));
+struct open_event *unused_open_event __attribute__((unused));
 
 // Process lineage state carried per PID
 struct process_lineage {
@@ -70,7 +85,7 @@ struct scratch_buffer {
 };
 
 struct exec_scratch {
-    char argv0[64];
+    char args[PATH_BUF_SIZE];
 };
 
 #endif

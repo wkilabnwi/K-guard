@@ -42,8 +42,10 @@ static __always_inline long read_path(char *dst, __u32 dst_size, const void *src
     return n;
 }
 
-static __always_inline void fill_common(struct kguard_event *e, __u32 evt_type) {
-    // We zero out the memory before using it
+static __always_inline void fill_common(struct event_hdr *e, __u32 evt_type) {
+    // We zero out the memory before we used it
+    // cause someone decided giving back a pointer 
+    // without zeroing the memory is a good idea !
     __builtin_memset(e, 0, sizeof(*e));
 
     __u64 id = bpf_get_current_pid_tgid();
@@ -54,7 +56,7 @@ static __always_inline void fill_common(struct kguard_event *e, __u32 evt_type) 
     e->gid = (__u32)(uid_gid >> 32);
     e->cgroup_id = bpf_get_current_cgroup_id();
     e->event_type = evt_type;
-    e->ret = 0;
+    
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
 
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();

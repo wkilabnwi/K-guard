@@ -41,53 +41,66 @@ func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager) *Router
 // ProcessRawRecord decodes one ring buffer sample and routes it. Decode
 // errors are logged via the metrics ring-buffer-drop counter and otherwise
 // swallowed to avoid a malformed record taking down the read loop
+
 func (r *Router) ProcessRawRecord(raw []byte) {
-	var event kebpf.BPFKguardEvent
-	if err := binary.Read(bytes.NewBuffer(raw), binary.LittleEndian, &event); err != nil {
+	// Unmarshal the common header first
+	var hdr kebpf.BPFEventHdr
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &hdr); err != nil {
 		r.metrics.IncRingbufDrop()
 		return
 	}
 
-	et := kebpf.EventType(event.EventType)
+	et := kebpf.EventType(hdr.EventType)
 	r.metrics.IncEvent(et.String())
 
-	comm := int8ToString(event.Comm[:])
-	uncleanfilename := int8ToString(event.Filename[:])
-	filename := resolveAbsolutePath(event.Pid, uncleanfilename)
-	argv0 := int8ToString(event.Argv0[:])
+	comm := int8ToString(hdr.Comm[:])
 
-	ancestorSuspicious := event.AncestorSuspicious == 1
-	ancestorFilename := filepath.Clean(int8ToString(event.AncestorFilename[:]))
-
-	pathTruncated := event.PathTruncated == 1
+	ancestorSuspicious := hdr.AncestorSuspicious == 1
+	ancestorFilename := filepath.Clean(int8ToString(hdr.AncestorFilename[:]))
 
 	switch et {
-	case kebpf.EventExec:
-		if filename == "" {
-			filename = "UNKNOWN_OR_EMPTY"
+	case kebpf.EventExec, kebpf.EventExecBlocked:
+		var evt kebpf.BPFExecEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
 		}
-		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, false, ancestorSuspicious, ancestorFilename, pathTruncated)
 
-	case kebpf.EventExecBlocked:
+		uncleanfilename := int8ToString(evt.Filename[:])
+		filename := resolveAbsolutePath(hdr.Pid, uncleanfilename)
 		if filename == "" {
 			filename = "UNKNOWN_OR_EMPTY"
 		}
-		r.engine.AnalyzeExec(comm, filename, event.Pid, event.Ppid, event.Uid, event.Gid, event.CgroupId, argv0, true, ancestorSuspicious, ancestorFilename, pathTruncated)
+		args := parseArgs(evt.Args[:])
+		pathTruncated := evt.PathTruncated == 1
+
+		isBlocked := (et == kebpf.EventExecBlocked)
+
+		r.engine.AnalyzeExec(
+			comm, filename, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
+			hdr.CgroupId, args, isBlocked, ancestorSuspicious,
+			ancestorFilename, pathTruncated,
+		)
 
 	case kebpf.EventConnect:
-		// Skip known noisy background processes entirely
 		if isIgnoredComm(r.cfg.Current().IgnoredConnectComms, comm) {
 			return
 		}
 
-		var destIP string
-		destPort := event.Dport
+		var evt kebpf.BPFConnectEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
 
-		switch event.Family {
+		var destIP string
+		destPort := evt.Dport
+
+		switch evt.Family {
 		case 1: // AF_UNIX
-			path := int8ToString(event.UnixPath[:])
+			// Empty sun_path with no error usually means an abstract socket
+			path := int8ToString(evt.UnixPath[:])
 			if path == "" {
-				// Empty sun_path with no error usually means an abstract socket
 				path = "(anonymous/abstract socket)"
 			}
 			destIP = "unix:" + path
@@ -95,9 +108,9 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		case 2: // AF_INET
 			ip := make(net.IP, 4)
-			binary.LittleEndian.PutUint32(ip, event.Daddr)
 			// Loopback connects are near-always local tooling
 			// talking to itself so not worth alerting on, will defo change it later
+			binary.LittleEndian.PutUint32(ip, evt.Daddr)
 			if isLoopback(ip) {
 				return
 			}
@@ -105,38 +118,49 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		case 10: // AF_INET6
 			ip := make(net.IP, 16)
-			copy(ip, event.Daddr6[:])
+			copy(ip, evt.Daddr6[:])
 			if isLoopback(ip) {
 				return
 			}
 			destIP = "[" + ip.String() + "]"
 
 		default:
-			destIP = fmt.Sprintf("(unknown address family %d)", event.Family)
+			destIP = fmt.Sprintf("(unknown address family %d)", evt.Family)
 		}
 
-		r.engine.AnalyzeConnect(event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, destIP, destPort, ancestorSuspicious, ancestorFilename)
-	case kebpf.EventOpenSensitive:
-		r.engine.AnalyzeGeneric("OPEN_SENSITIVE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
+		r.engine.AnalyzeConnect(
+			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
+			hdr.CgroupId, destIP, destPort, ancestorSuspicious, ancestorFilename,
+		)
+
+	case kebpf.EventOpenSensitive, kebpf.EventMemfd, kebpf.EventSensitiveWrite:
+		var evt kebpf.BPFOpenEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		uncleanfilename := int8ToString(evt.Filename[:])
+		filename := resolveAbsolutePath(hdr.Pid, uncleanfilename)
+		pathTruncated := evt.PathTruncated == 1
+
+		switch et {
+		case kebpf.EventOpenSensitive:
+			r.engine.AnalyzeGeneric("OPEN_SENSITIVE", config.SeverityHigh, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
+		case kebpf.EventMemfd:
+			r.engine.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
+		case kebpf.EventSensitiveWrite:
+			r.engine.AnalyzeGeneric("SENSITIVE_WRITE", config.SeverityCritical, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, filename, fmt.Sprintf("open flags=0x%x (write intent on protected path)", hdr.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
+		}
 
 	case kebpf.EventPtrace:
-		r.engine.AnalyzeGeneric("PTRACE", config.SeverityMedium, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "",
-			fmt.Sprintf("ptrace request=%d", event.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
+		r.engine.AnalyzeGeneric("PTRACE", config.SeverityMedium, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", fmt.Sprintf("ptrace request=%d", hdr.Ret), ancestorSuspicious, ancestorFilename, false)
 
 	case kebpf.EventSetuid:
-		r.engine.AnalyzeGeneric("SETUID", config.SeverityMedium, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "",
-			fmt.Sprintf("target uid=%d", event.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
+		r.engine.AnalyzeGeneric("SETUID", config.SeverityMedium, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", fmt.Sprintf("target uid=%d", hdr.Ret), ancestorSuspicious, ancestorFilename, false)
 
 	case kebpf.EventModuleLoad:
-		r.engine.AnalyzeGeneric("MODULE_LOAD", config.SeverityCritical, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, "", "", ancestorSuspicious, ancestorFilename, pathTruncated)
-
-	case kebpf.EventMemfd:
-		r.engine.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
-
-	case kebpf.EventSensitiveWrite:
-		r.engine.AnalyzeGeneric("SENSITIVE_WRITE", config.SeverityCritical,
-			event.Pid, event.Ppid, event.Uid, event.Gid, comm, event.CgroupId,
-			filename, fmt.Sprintf("open flags=0x%x (write intent on protected path)", event.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
+		r.engine.AnalyzeGeneric("MODULE_LOAD", config.SeverityCritical, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", "", ancestorSuspicious, ancestorFilename, false)
 	}
 }
 
@@ -172,4 +196,21 @@ func resolveAbsolutePath(pid uint32, rawPath string) string {
 	}
 
 	return clean
+}
+
+// parseArgs processes the null-separated argument block from mm_struct
+func parseArgs(bs []int8) string {
+	b := make([]byte, 0, len(bs))
+	for i := 0; i < len(bs); i++ {
+		v := bs[i]
+		if v == 0 {
+			if i+1 < len(bs) && bs[i+1] == 0 {
+				break
+			}
+			b = append(b, ' ')
+			continue
+		}
+		b = append(b, byte(v))
+	}
+	return string(bytes.TrimSpace(b))
 }

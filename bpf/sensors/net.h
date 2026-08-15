@@ -44,10 +44,10 @@ int tp_connect(struct syscall_connect_args *ctx) {
         return 0;
     }
  
-    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    struct connect_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return 0;
  
-    fill_common(e, EVT_CONNECT);
+    fill_common(&e->hdr, EVT_CONNECT);
     e->family = family;
     // Zero every family-specific field up front, the ring buffer doesn't
     // zero reused memory for us

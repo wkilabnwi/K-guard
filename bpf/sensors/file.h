@@ -34,11 +34,11 @@ int tp_openat(struct syscall_openat_args *ctx) {
                         (ctx->flags & O_ACCMODE_MASK) == O_RDWR_;
 
     if (write_intent && path_in_map(path, &sensitive_write_paths)) {
-        struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+        struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
-            fill_common(e, EVT_SENSITIVE_WRITE);
+            fill_common(&e->hdr, EVT_SENSITIVE_WRITE);
             __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
-            e->ret = ctx->flags; // stash raw flags for userspace to decode
+            e->hdr.ret = ctx->flags; // stash raw flags for userspace to decode
             e->path_truncated = truncated;
             bpf_ringbuf_submit(e, 0);
         }
@@ -47,9 +47,9 @@ int tp_openat(struct syscall_openat_args *ctx) {
     if (!path_in_map(path, &suspicious_paths)) {
         return 0;
     }
-    struct kguard_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
+    struct open_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
     if (!e2) return 0;
-    fill_common(e2, EVT_OPEN_SENSITIVE);
+    fill_common(&e2->hdr, EVT_OPEN_SENSITIVE);
     __builtin_memcpy(e2->filename, path, PATH_BUF_SIZE);
     e2->path_truncated = truncated;
     bpf_ringbuf_submit(e2, 0);
@@ -95,11 +95,11 @@ int tp_openat2(struct syscall_openat2_args *ctx) {
                         (flags & O_ACCMODE_MASK) == O_RDWR_;
 
     if (write_intent && path_in_map(path, &sensitive_write_paths)) {
-        struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+        struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
         if (e) {
-            fill_common(e, EVT_SENSITIVE_WRITE);
+            fill_common(&e->hdr, EVT_SENSITIVE_WRITE);
             __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
-            e->ret = (__s32)flags;
+            e->hdr.ret = (__s32)flags;
             e->path_truncated = truncated;
             bpf_ringbuf_submit(e, 0);
         }
@@ -108,9 +108,9 @@ int tp_openat2(struct syscall_openat2_args *ctx) {
     if (!path_in_map(path, &suspicious_paths)) {
         return 0;
     }
-    struct kguard_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
+    struct open_event *e2 = bpf_ringbuf_reserve(&rb, sizeof(*e2), 0);
     if (!e2) return 0;
-    fill_common(e2, EVT_OPEN_SENSITIVE);
+    fill_common(&e2->hdr, EVT_OPEN_SENSITIVE);
     __builtin_memcpy(e2->filename, path, PATH_BUF_SIZE);
     e2->path_truncated = truncated;
     bpf_ringbuf_submit(e2, 0);
@@ -128,9 +128,9 @@ struct syscall_memfd_create_args {
 
 SEC("tracepoint/syscalls/sys_enter_memfd_create")
 int tp_memfd_create(struct syscall_memfd_create_args *ctx) {
-    struct kguard_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return 0;
-    fill_common(e, EVT_MEMFD);
+    fill_common(&e->hdr, EVT_MEMFD);
     bpf_probe_read_user_str(&e->filename, sizeof(e->filename), ctx->uname);
     bpf_ringbuf_submit(e, 0);
     return 0;

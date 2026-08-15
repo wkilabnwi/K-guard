@@ -34,7 +34,7 @@
       "match": "basename",
       "pattern": "xmrig",
       "severity": "critical",
-      "action": "KILL"
+      "action": "ALERT"
     },
     {
       "name": "Raw socket sniffer (tcpdump) outside admin allowlist",

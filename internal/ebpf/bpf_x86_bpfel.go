@@ -12,9 +12,17 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type BPFExecScratch struct{ Argv0 [64]int8 }
+type BPFConnectEvent struct {
+	Hdr      BPFEventHdr
+	Daddr    uint32
+	Daddr6   [16]uint8
+	Dport    uint16
+	Family   uint16
+	UnixPath [108]int8
+	_        [4]byte
+}
 
-type BPFKguardEvent struct {
+type BPFEventHdr struct {
 	TimestampNs        uint64
 	Pid                uint32
 	Ppid               uint32
@@ -22,22 +30,29 @@ type BPFKguardEvent struct {
 	Gid                uint32
 	CgroupId           uint64
 	EventType          uint32
-	Ret                int32
 	Comm               [16]int8
-	Filename           [256]int8
-	Argv0              [64]int8
-	Daddr              uint32
-	Daddr6             [16]uint8
-	Dport              uint16
-	Family             uint16
-	UnixPath           [108]int8
-	WriteFd            uint32
-	WriteCount         uint64
-	WriteBuf           [64]int8
 	AncestorSuspicious uint8
 	AncestorFilename   [256]int8
-	PathTruncated      uint8
-	_                  [6]byte
+	_                  [3]byte
+	Ret                int32
+	_                  [4]byte
+}
+
+type BPFExecEvent struct {
+	Hdr           BPFEventHdr
+	Filename      [256]int8
+	Args          [256]int8
+	PathTruncated uint8
+	_             [7]byte
+}
+
+type BPFExecScratch struct{ Args [256]int8 }
+
+type BPFOpenEvent struct {
+	Hdr           BPFEventHdr
+	Filename      [256]int8
+	PathTruncated uint8
+	_             [7]byte
 }
 
 type BPFProcessLineage struct {
