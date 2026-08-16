@@ -42,8 +42,9 @@ type BPFExecEvent struct {
 	Hdr           BPFEventHdr
 	Filename      [256]int8
 	Args          [256]int8
+	IsFileless    uint8
 	PathTruncated uint8
-	_             [7]byte
+	_             [6]byte
 }
 
 type BPFExecScratch struct{ Args [256]int8 }
@@ -51,8 +52,9 @@ type BPFExecScratch struct{ Args [256]int8 }
 type BPFOpenEvent struct {
 	Hdr           BPFEventHdr
 	Filename      [256]int8
+	IsFileless    uint8
 	PathTruncated uint8
-	_             [7]byte
+	_             [6]byte
 }
 
 type BPFProcessLineage struct {

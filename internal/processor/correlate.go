@@ -26,7 +26,8 @@ type Correlator struct {
 
 func NewCorrelator(window time.Duration) *Correlator {
 	return &Correlator{window: window,
-		cache: newLRUCache[uint32, ProcessNode](1000)}
+		cache: newLRUCache[uint32, ProcessNode](1000),
+	}
 }
 
 // RecordExec should be called for every observed exec (whether or not it

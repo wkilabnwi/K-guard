@@ -73,13 +73,14 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		}
 		args := parseArgs(evt.Args[:])
 		pathTruncated := evt.PathTruncated == 1
+		isFileless := evt.IsFileless == 1
 
 		isBlocked := (et == kebpf.EventExecBlocked)
 
 		r.engine.AnalyzeExec(
 			comm, filename, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
 			hdr.CgroupId, args, isBlocked, ancestorSuspicious,
-			ancestorFilename, pathTruncated,
+			ancestorFilename, pathTruncated, isFileless,
 		)
 
 	case kebpf.EventConnect:

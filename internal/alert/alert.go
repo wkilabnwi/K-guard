@@ -42,6 +42,7 @@ type Alert struct {
 	// Free form extra detail
 	Detail        string `json:"detail,omitempty"`
 	PathTruncated bool   `json:"path_truncated,omitempty"`
+	IsFileless    bool   `json:"is_fileless,omitempty"`
 
 	// ResponseErr records why an intended KILL action didn't happen, kept on the alert itself so it
 	// shows up in the store/dashboard rather than only in logs.

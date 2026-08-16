@@ -28,6 +28,7 @@ it, a BPF LSM hook:
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
+| `FILELESS_EXEC` | `lsm/bprm_check_security` | Detected structurally in-kernel via zero-link count (`i_nlink == 0`) on `tmpfs` (`memfd`) |
 
 ### Two operating modes
 

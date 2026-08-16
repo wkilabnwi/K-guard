@@ -128,10 +128,19 @@ struct syscall_memfd_create_args {
 
 SEC("tracepoint/syscalls/sys_enter_memfd_create")
 int tp_memfd_create(struct syscall_memfd_create_args *ctx) {
+    __u32 zero = 0;
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
+    if (!scratch) return 0;
+    
+    char *memfd_name = scratch->primary;
+    __builtin_memset(memfd_name, 0, PATH_BUF_SIZE);
+    
+    bpf_probe_read_user_str(memfd_name, PATH_BUF_SIZE, ctx->uname);
+
     struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e) return 0;
     fill_common(&e->hdr, EVT_MEMFD);
-    bpf_probe_read_user_str(&e->filename, sizeof(e->filename), ctx->uname);
+    __builtin_memcpy(e->filename, memfd_name, PATH_BUF_SIZE);
     bpf_ringbuf_submit(e, 0);
     return 0;
 }

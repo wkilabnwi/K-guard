@@ -48,6 +48,7 @@ struct exec_event {
     struct event_hdr hdr;
     char filename[PATH_BUF_SIZE];
     char args[256];
+    __u8 isFileless;
     __u8 path_truncated;
 };
 
@@ -63,6 +64,7 @@ struct connect_event {
 struct open_event {
     struct event_hdr hdr;
     char filename[PATH_BUF_SIZE];
+    __u8 isFileless;
     __u8 path_truncated;
 };
 

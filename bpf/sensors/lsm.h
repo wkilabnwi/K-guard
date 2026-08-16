@@ -1,6 +1,10 @@
 #ifndef __KGUARD_SENSORS_LSM_H
 #define __KGUARD_SENSORS_LSM_H
 
+#ifndef TMPFS_MAGIC
+#define TMPFS_MAGIC 0x01021994
+#endif
+
 #include "../types.h"
 #include "../maps.h"
 #include "../helpers.h"
@@ -29,7 +33,8 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
     }
 
     __u8 truncated = (ret >= PATH_BUF_SIZE) ? 1 : 0;
-// Clamp into a verifier-provable bounded range BEFORE any pointer math
+
+// Clamp into a verifier-provable bounded range before any pointer math
     __u32 pathlen = (__u32)ret;
     if (pathlen > PATH_BUF_SIZE)
         pathlen = PATH_BUF_SIZE;
@@ -48,14 +53,43 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     // clear every full word from word_start onward 
     __u64 *path64 = (__u64 *)path;
-#pragma unroll
-for (__u32 i = 0; i < (PATH_BUF_SIZE / 8); i++) {
-    if ((i * 8) >= word_start)
-        path64[i] = 0;
-}
-    // bpf_d_path returns total path string length including null byte.
-    // If length >= PATH_BUF_SIZE, the buffer reached capacity and was truncated
-    
+    #pragma unroll
+    for (__u32 i = 0; i < (PATH_BUF_SIZE / 8); i++) {
+        if ((i * 8) >= word_start)
+            path64[i] = 0;
+    }
+
+    struct file *file = bprm->file;
+    if (file) {
+        struct inode *inode = BPF_CORE_READ(file, f_inode);
+        if (inode) {
+            unsigned int nlink = BPF_CORE_READ(inode, i_nlink);
+            unsigned long s_magic = BPF_CORE_READ(file, f_path.dentry, d_sb, s_magic);
+
+            // memfd / fileless payloads are unlinked and live on tmpfs
+            if (nlink == 0 && s_magic == TMPFS_MAGIC) {
+                struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+                if (e) {
+                    fill_common(&e->hdr, EVT_EXEC);
+                    __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
+                    e->isFileless = 1;
+                    e->path_truncated = truncated;
+
+                    __u64 pid_tgid = bpf_get_current_pid_tgid();
+                    struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+                    if (scratch2) {
+                        __builtin_memcpy(e->args, scratch2->args, sizeof(e->args));
+                        bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
+                    }
+
+                    bpf_ringbuf_submit(e, 0);
+                }
+                return -1; // Audit-only: allows execution to proceed while alerting user space
+            }
+        }
+    }
+
+
 
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);

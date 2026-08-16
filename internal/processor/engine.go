@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 	"strconv"
@@ -119,15 +120,30 @@ func isAllowlisted(cfg *config.Config, filename string) bool {
 // prevented pre-flight by the LSM hook (EVT_EXEC_BLOCKED), in that case no
 // KILL is attempted (there is no process to kill; it never ran), but a
 // BLOCK-severity alert is still produced.
-func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, args string, blocked bool, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
+func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, args string, blocked bool, ancestorSuspicious bool, ancestorFilename string, pathTruncated, isFileless bool) {
 	cfg := e.cfg.Current()
 	h := &execHash{pid: pid}
 
 	e.correlator.RecordExec(pid, ppid, comm, filename)
 
 	if isAllowlisted(cfg, filename) {
-		log.Printf("[engine] [EXEC-allowlisted] pid=%d path=%q", pid, filename)
 		return // explicitly trusted
+	}
+
+	if isFileless {
+		filelessDetail := fmt.Sprintf("Fileless execution detected")
+		e.metrics.IncRuleHit("FilelessExecution")
+		sev := config.SeverityCritical
+
+		a := alert.Alert{
+			Severity: string(sev), Action: string(config.ActionKill),
+			EventType: "FILELESS_EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
+			Filename: filename, Args: args, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+			PathTruncated: pathTruncated, Detail: filelessDetail,
+		}
+
+		e.dispatcher.Dispatch(e.enrichAlert(a))
+		return
 	}
 
 	if blocked {
@@ -138,7 +154,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		}
 
 		a := alert.Alert{
-			Severity: string(config.SeverityCritical), Action: string(config.ActionBlock),
+			Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
 			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
 			CgroupID: cgroupID, Filename: filename, Args: args,
 			AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
