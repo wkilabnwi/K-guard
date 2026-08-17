@@ -7,6 +7,50 @@
 #include "../types.h"
 #include "../helpers.h"
 
+// Helpers 
+static __always_inline void read_process_args(struct exec_event *e) {
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    struct mm_struct *mm = BPF_CORE_READ(task, mm);
+    if (!mm) return;
+
+    unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
+    unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
+    unsigned long len = arg_end - arg_start;
+
+    if (len == 0) return;
+
+    if (len > sizeof(e->args) - 2) {
+        len = sizeof(e->args) - 2;
+    }
+
+    if (bpf_probe_read_user(e->args, len, (const void *)arg_start) == 0) {
+        e->args[len] = 0x00;
+        e->args[len + 1] = 0x00;
+    }
+}
+
+// Helper to handle lineage updates when a suspicious binary is executed
+static __always_inline void handle_suspicious_lineage(struct exec_event *e, struct scratch_buffer *scratch) {
+    struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->hdr.pid);
+    struct process_lineage *updated_lin = &scratch->lin;
+    __builtin_memset(updated_lin, 0, sizeof(*updated_lin));
+
+    if (lin) {
+        *updated_lin = *lin;
+    } else {
+        updated_lin->parent_pid = e->hdr.ppid;
+    }
+
+    updated_lin->suspicious_ancestor = 1;
+    __builtin_memcpy(updated_lin->ancestor_filename, e->filename, sizeof(updated_lin->ancestor_filename));
+    bpf_map_update_elem(&lineage_map, &e->hdr.pid, updated_lin, BPF_ANY);
+
+    e->hdr.ancestor_suspicious = 1;
+    __builtin_memcpy(e->hdr.ancestor_filename, e->filename, sizeof(e->filename));
+}
+
+// Sensor
+
 
 struct syscall_execve_args {
     unsigned long long common_tp_fields;
@@ -75,82 +119,40 @@ struct sched_process_exec_args {
 
 SEC("tracepoint/sched/sched_process_exec")
 int tp_schedexec(struct sched_process_exec_args *ctx) {
-
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 pid = (__u32)(pid_tgid >> 32);
-
-
     __u32 zero = 0;
     struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
-    if (!scratch) {
-         return 0; }
+    if (!scratch) return 0;
 
-    char *filename = scratch->primary; // Offloaded to map memory
+    char *filename = scratch->primary;
     __builtin_memset(filename, 0, PATH_BUF_SIZE);
 
     __u16 offset = ctx->filename_loc & 0xffff;
     const char *fn = (const char *)ctx + offset;
     __u8 truncated = 0;
 
-    long n = read_path(filename, PATH_BUF_SIZE, fn, 0, &truncated);
-    if (n <= 0) {
-        return 0; // Abort if reading path failed
+    if (read_path(filename, PATH_BUF_SIZE, fn, 0, &truncated) <= 0) {
+        return 0; // Abort if path reading failed
     }
 
-
     struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) {
-        
-        return 0; }
+    if (!e) return 0;
 
     fill_common(&e->hdr, EVT_EXEC);
-
     __builtin_memcpy(e->filename, filename, sizeof(e->filename));
     e->path_truncated = truncated;
 
-    // We actually populate the args buffer and this time
-    // we do it the right way
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    struct mm_struct *mm = BPF_CORE_READ(task, mm);
-        if (mm) {
-            unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
-            unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
-            unsigned long len = arg_end - arg_start;
+    // Populate command-line arguments safely from memory layout
+    read_process_args(e);
 
-            if (len > 0) {
-                if (len > sizeof(e->args) - 2) {
-                    len = sizeof(e->args) - 2;
-                }
-
-                if (bpf_probe_read_user(e->args, len, (const void *)arg_start) == 0) {
-                    e->args[len] = 0x00;
-                    e->args[len + 1] = 0x00;
-                }
-            }
-        }
-
+    // Track lineage if the path matches suspicious criteria
     if (path_in_map(e->filename, &suspicious_paths)) {
-        struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->hdr.pid);
-        struct process_lineage *updated_lin = &scratch->lin; // Offloaded to map memory
-        __builtin_memset(updated_lin, 0, sizeof(*updated_lin));
-
-        if (lin) {
-            *updated_lin = *lin;
-        } else {
-            updated_lin->parent_pid = e->hdr.ppid;
-        }
-
-        updated_lin->suspicious_ancestor = 1;
-        __builtin_memcpy(updated_lin->ancestor_filename, e->filename, sizeof(updated_lin->ancestor_filename));
-        bpf_map_update_elem(&lineage_map, &e->hdr.pid, updated_lin, BPF_ANY);
-
-        e->hdr.ancestor_suspicious = 1;
-        __builtin_memcpy(e->hdr.ancestor_filename, e->filename, sizeof(e->hdr.ancestor_filename));
+        handle_suspicious_lineage(e, scratch);
     }
 
     bpf_ringbuf_submit(e, 0);
-
     return 0;
 }
+
+
 
 #endif

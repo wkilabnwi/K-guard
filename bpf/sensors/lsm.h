@@ -9,12 +9,54 @@
 #include "../maps.h"
 #include "../helpers.h"
 
+
+// HELPERS
+
+static __always_inline void emit_exec_event(__u32 type, char *path, __u8 truncated, __u8 is_fileless) {
+    struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return;
+
+    fill_common(&e->hdr, type);
+    __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
+    e->isFileless = is_fileless;
+    e->path_truncated = truncated;
+
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
+    if (scratch2) {
+        __builtin_memcpy(e->args, scratch2->args, sizeof(e->args));
+        bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
+    }
+
+    bpf_ringbuf_submit(e, 0);
+}
+
+static __always_inline int check_fileless(struct linux_binprm *bprm, char *path, __u8 truncated) {
+    struct file *file = BPF_CORE_READ(bprm, file);
+    if (!file) return 0;
+
+    struct inode *inode = BPF_CORE_READ(file, f_inode);
+    if (!inode) return 0;
+
+    unsigned int nlink = BPF_CORE_READ(inode, i_nlink);
+    unsigned long s_magic = BPF_CORE_READ(file, f_path.dentry, d_sb, s_magic);
+
+    // memfd / fileless payloads are unlinked and live on tmpfs
+    if (nlink == 0 && s_magic == TMPFS_MAGIC) {
+        emit_exec_event(EVT_EXEC, path, truncated, 1);
+        return 1;
+    }
+
+    return 0;
+}
+
+// LSM HOOk
+
 SEC("lsm/bprm_check_security")
 int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     __u32 zero = 0;
     __u8 *enabled = bpf_map_lookup_elem(&enforcement_enabled, &zero);
-
 
     if (!enabled || *enabled == 0) {
         return 0;
@@ -25,95 +67,27 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     char *path = scratch->primary; // Offloaded to map memory
     __builtin_memset(path, 0, PATH_BUF_SIZE);
+    __u8 truncated = 0;
 
     // we use bpf_d_path to solve the problem of an attcker using .././/./.. in paths for example
-    long ret = bpf_d_path(&bprm->file->f_path, path, PATH_BUF_SIZE);
-    if (ret < 0) {
-        return 0; // Fail-open on resolution failure to avoid locking up host
+    if (get_safe_path(&bprm->file->f_path, path, PATH_BUF_SIZE, &truncated) < 0) {
+        return 0;
     }
 
-    __u8 truncated = (ret >= PATH_BUF_SIZE) ? 1 : 0;
-
-// Clamp into a verifier-provable bounded range before any pointer math
-    __u32 pathlen = (__u32)ret;
-    if (pathlen > PATH_BUF_SIZE)
-        pathlen = PATH_BUF_SIZE;
-
-    __u32 word_start = (pathlen + 7) & ~7U;
-    if (word_start > PATH_BUF_SIZE)
-        word_start = PATH_BUF_SIZE;
-
-    // clear the single word straddling ret
-   #pragma unroll
-    for (__u32 i = 0; i < 8; i++) {
-        __u32 idx = pathlen + i;
-        if (idx < word_start && idx < PATH_BUF_SIZE)
-            path[idx] = 0;
+    if (check_fileless(bprm, path, truncated)) {
+        return -1;
     }
-
-    // clear every full word from word_start onward 
-    __u64 *path64 = (__u64 *)path;
-    #pragma unroll
-    for (__u32 i = 0; i < (PATH_BUF_SIZE / 8); i++) {
-        if ((i * 8) >= word_start)
-            path64[i] = 0;
-    }
-
-    struct file *file = bprm->file;
-    if (file) {
-        struct inode *inode = BPF_CORE_READ(file, f_inode);
-        if (inode) {
-            unsigned int nlink = BPF_CORE_READ(inode, i_nlink);
-            unsigned long s_magic = BPF_CORE_READ(file, f_path.dentry, d_sb, s_magic);
-
-            // memfd / fileless payloads are unlinked and live on tmpfs
-            if (nlink == 0 && s_magic == TMPFS_MAGIC) {
-                struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-                if (e) {
-                    fill_common(&e->hdr, EVT_EXEC);
-                    __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
-                    e->isFileless = 1;
-                    e->path_truncated = truncated;
-
-                    __u64 pid_tgid = bpf_get_current_pid_tgid();
-                    struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
-                    if (scratch2) {
-                        __builtin_memcpy(e->args, scratch2->args, sizeof(e->args));
-                        bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
-                    }
-
-                    bpf_ringbuf_submit(e, 0);
-                }
-                return -1; // Audit-only: allows execution to proceed while alerting user space
-            }
-        }
-    }
-
-
-
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
 
     if (blocked && *blocked == 1) {
-        struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-        if (e) {
-            fill_common(&e->hdr, EVT_EXEC_BLOCKED);
-            __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
-            e->path_truncated = truncated;
-
-            __u64 pid_tgid = bpf_get_current_pid_tgid();
-            struct exec_scratch *scratch2 = bpf_map_lookup_elem(&exec_scratch_map, &pid_tgid);
-            if (scratch2) {
-                __builtin_memcpy(e->args, scratch2->args, sizeof(e->args));
-                bpf_map_delete_elem(&exec_scratch_map, &pid_tgid);
-            }
-
-            bpf_ringbuf_submit(e, 0);
-        }
-        return -1; //kernel aborts the exec 
+        emit_exec_event(EVT_EXEC_BLOCKED, path, truncated, 0);
+        return -1;
     }
 
     return 0;
 }
+
+
 
 #endif

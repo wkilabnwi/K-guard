@@ -77,4 +77,38 @@ static __always_inline void fill_common(struct event_hdr *e, __u32 evt_type) {
     }
 }
 
+// This function is the bane of my existence
+// Can an eBPF contributor please fix bpf_d_path ?
+static __always_inline long get_safe_path(struct path *path, char *buf, __u32 buf_size, __u8 *truncated) {
+    __builtin_memset(buf, 0, buf_size);
+
+    long ret = bpf_d_path(path, buf, buf_size);
+    if (ret < 0) {
+        return ret;
+    }
+
+    *truncated = (ret >= buf_size) ? 1 : 0;
+    __u32 pathlen = (ret > buf_size) ? buf_size : (__u32)ret;
+
+    __u32 word_start = (pathlen + 7) & ~7U;
+    if (word_start > buf_size)
+        word_start = buf_size;
+
+    #pragma unroll
+    for (__u32 i = 0; i < 8; i++) {
+        __u32 idx = pathlen + i;
+        if (idx < word_start && idx < buf_size)
+            buf[idx] = 0;
+    }
+
+    __u64 *buf64 = (__u64 *)buf;
+    #pragma unroll
+    for (__u32 i = 0; i < (PATH_BUF_SIZE / 8); i++) {
+        if ((i * 8) >= word_start)
+            buf64[i] = 0;
+    }
+
+    return ret;
+}
+
 #endif
