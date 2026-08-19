@@ -5,12 +5,33 @@
 #define TMPFS_MAGIC 0x01021994
 #endif
 
+#ifndef PTRACE_MODE_READ
+#define PTRACE_MODE_READ 0x01
+#endif
+
 #include "../types.h"
 #include "../maps.h"
 #include "../helpers.h"
 
 
 // HELPERS
+
+static __always_inline void emit_ptrace_event(struct task_struct *child, unsigned int mode, const char *caller_comm, const char *target_comm) {
+    struct ptrace_event *ev = bpf_ringbuf_reserve(&rb, sizeof(*ev), 0);
+    if (!ev) {
+        return;
+    }
+
+    fill_common(&ev->hdr, EVENT_PTRACE_BLOCKED);
+
+    ev->target_pid = BPF_CORE_READ(child, pid);
+    ev->mode = mode;
+
+    __builtin_memcpy(ev->caller_comm, caller_comm, sizeof(ev->caller_comm));
+    __builtin_memcpy(ev->target_comm, target_comm, sizeof(ev->target_comm));
+
+    bpf_ringbuf_submit(ev, 0);
+}
 
 static __always_inline void emit_exec_event(__u32 type, char *path, __u8 truncated, __u8 is_fileless) {
     struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
@@ -87,6 +108,33 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
     }
 
     return 0;
+}
+
+SEC("lsm/ptrace_access_check")
+int BPF_PROG(lsm_ptrace_access_check, struct task_struct *child, unsigned int mode) {
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&ptrace_enforcement_enabled, &zero);
+    if (!enabled || *enabled == 0) {
+        return 0; 
+    }
+
+    if (mode & PTRACE_MODE_READ) {
+        return 0; 
+    }
+
+    char caller_comm[64];
+    bpf_get_current_comm(&caller_comm, sizeof(caller_comm));
+
+    __u8 *allowed = bpf_map_lookup_elem(&allowed_ptrace_attaches, caller_comm);
+    if (allowed && *allowed == 1) {
+        return 0;
+    }
+
+    char target_comm[64];
+    BPF_CORE_READ_STR_INTO(&target_comm, child, comm);
+
+    emit_ptrace_event(child, mode, caller_comm, target_comm);
+    return -1;
 }
 
 

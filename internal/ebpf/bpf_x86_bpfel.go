@@ -64,6 +64,14 @@ type BPFProcessLineage struct {
 	_                  [3]byte
 }
 
+type BPFPtraceEvent struct {
+	Hdr        BPFEventHdr
+	TargetPid  uint32
+	Mode       uint32
+	CallerComm [64]int8
+	TargetComm [64]int8
+}
+
 type BPFScratchBuffer struct {
 	Primary [256]int8
 	Walk    [256]int8
@@ -111,33 +119,36 @@ type BPFSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFProgramSpecs struct {
-	LsmBprmCheck  *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
-	LsmFileOpen   *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
-	TpConnect     *ebpf.ProgramSpec `ebpf:"tp_connect"`
-	TpExecve      *ebpf.ProgramSpec `ebpf:"tp_execve"`
-	TpInitModule  *ebpf.ProgramSpec `ebpf:"tp_init_module"`
-	TpMemfdCreate *ebpf.ProgramSpec `ebpf:"tp_memfd_create"`
-	TpOpenat      *ebpf.ProgramSpec `ebpf:"tp_openat"`
-	TpOpenat2     *ebpf.ProgramSpec `ebpf:"tp_openat2"`
-	TpPtrace      *ebpf.ProgramSpec `ebpf:"tp_ptrace"`
-	TpSchedexec   *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
-	TpSchedfork   *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
-	TpSetuid      *ebpf.ProgramSpec `ebpf:"tp_setuid"`
+	LsmBprmCheck         *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
+	LsmFileOpen          *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
+	LsmPtraceAccessCheck *ebpf.ProgramSpec `ebpf:"lsm_ptrace_access_check"`
+	TpConnect            *ebpf.ProgramSpec `ebpf:"tp_connect"`
+	TpExecve             *ebpf.ProgramSpec `ebpf:"tp_execve"`
+	TpInitModule         *ebpf.ProgramSpec `ebpf:"tp_init_module"`
+	TpMemfdCreate        *ebpf.ProgramSpec `ebpf:"tp_memfd_create"`
+	TpOpenat             *ebpf.ProgramSpec `ebpf:"tp_openat"`
+	TpOpenat2            *ebpf.ProgramSpec `ebpf:"tp_openat2"`
+	TpPtrace             *ebpf.ProgramSpec `ebpf:"tp_ptrace"`
+	TpSchedexec          *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
+	TpSchedfork          *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
+	TpSetuid             *ebpf.ProgramSpec `ebpf:"tp_setuid"`
 }
 
 // BPFMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFMapSpecs struct {
-	BlockedPaths        *ebpf.MapSpec `ebpf:"blocked_paths"`
-	BlockedWritePaths   *ebpf.MapSpec `ebpf:"blocked_write_paths"`
-	EnforcementEnabled  *ebpf.MapSpec `ebpf:"enforcement_enabled"`
-	ExecScratchMap      *ebpf.MapSpec `ebpf:"exec_scratch_map"`
-	LineageMap          *ebpf.MapSpec `ebpf:"lineage_map"`
-	Rb                  *ebpf.MapSpec `ebpf:"rb"`
-	ScratchMap          *ebpf.MapSpec `ebpf:"scratch_map"`
-	SensitiveWritePaths *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
-	SuspiciousPaths     *ebpf.MapSpec `ebpf:"suspicious_paths"`
+	AllowedPtraceAttaches    *ebpf.MapSpec `ebpf:"allowed_ptrace_attaches"`
+	BlockedPaths             *ebpf.MapSpec `ebpf:"blocked_paths"`
+	BlockedWritePaths        *ebpf.MapSpec `ebpf:"blocked_write_paths"`
+	EnforcementEnabled       *ebpf.MapSpec `ebpf:"enforcement_enabled"`
+	ExecScratchMap           *ebpf.MapSpec `ebpf:"exec_scratch_map"`
+	LineageMap               *ebpf.MapSpec `ebpf:"lineage_map"`
+	PtraceEnforcementEnabled *ebpf.MapSpec `ebpf:"ptrace_enforcement_enabled"`
+	Rb                       *ebpf.MapSpec `ebpf:"rb"`
+	ScratchMap               *ebpf.MapSpec `ebpf:"scratch_map"`
+	SensitiveWritePaths      *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
+	SuspiciousPaths          *ebpf.MapSpec `ebpf:"suspicious_paths"`
 }
 
 // BPFObjects contains all objects after they have been loaded into the kernel.
@@ -159,24 +170,28 @@ func (o *BPFObjects) Close() error {
 //
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFMaps struct {
-	BlockedPaths        *ebpf.Map `ebpf:"blocked_paths"`
-	BlockedWritePaths   *ebpf.Map `ebpf:"blocked_write_paths"`
-	EnforcementEnabled  *ebpf.Map `ebpf:"enforcement_enabled"`
-	ExecScratchMap      *ebpf.Map `ebpf:"exec_scratch_map"`
-	LineageMap          *ebpf.Map `ebpf:"lineage_map"`
-	Rb                  *ebpf.Map `ebpf:"rb"`
-	ScratchMap          *ebpf.Map `ebpf:"scratch_map"`
-	SensitiveWritePaths *ebpf.Map `ebpf:"sensitive_write_paths"`
-	SuspiciousPaths     *ebpf.Map `ebpf:"suspicious_paths"`
+	AllowedPtraceAttaches    *ebpf.Map `ebpf:"allowed_ptrace_attaches"`
+	BlockedPaths             *ebpf.Map `ebpf:"blocked_paths"`
+	BlockedWritePaths        *ebpf.Map `ebpf:"blocked_write_paths"`
+	EnforcementEnabled       *ebpf.Map `ebpf:"enforcement_enabled"`
+	ExecScratchMap           *ebpf.Map `ebpf:"exec_scratch_map"`
+	LineageMap               *ebpf.Map `ebpf:"lineage_map"`
+	PtraceEnforcementEnabled *ebpf.Map `ebpf:"ptrace_enforcement_enabled"`
+	Rb                       *ebpf.Map `ebpf:"rb"`
+	ScratchMap               *ebpf.Map `ebpf:"scratch_map"`
+	SensitiveWritePaths      *ebpf.Map `ebpf:"sensitive_write_paths"`
+	SuspiciousPaths          *ebpf.Map `ebpf:"suspicious_paths"`
 }
 
 func (m *BPFMaps) Close() error {
 	return _BPFClose(
+		m.AllowedPtraceAttaches,
 		m.BlockedPaths,
 		m.BlockedWritePaths,
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
 		m.LineageMap,
+		m.PtraceEnforcementEnabled,
 		m.Rb,
 		m.ScratchMap,
 		m.SensitiveWritePaths,
@@ -188,24 +203,26 @@ func (m *BPFMaps) Close() error {
 //
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFPrograms struct {
-	LsmBprmCheck  *ebpf.Program `ebpf:"lsm_bprm_check"`
-	LsmFileOpen   *ebpf.Program `ebpf:"lsm_file_open"`
-	TpConnect     *ebpf.Program `ebpf:"tp_connect"`
-	TpExecve      *ebpf.Program `ebpf:"tp_execve"`
-	TpInitModule  *ebpf.Program `ebpf:"tp_init_module"`
-	TpMemfdCreate *ebpf.Program `ebpf:"tp_memfd_create"`
-	TpOpenat      *ebpf.Program `ebpf:"tp_openat"`
-	TpOpenat2     *ebpf.Program `ebpf:"tp_openat2"`
-	TpPtrace      *ebpf.Program `ebpf:"tp_ptrace"`
-	TpSchedexec   *ebpf.Program `ebpf:"tp_schedexec"`
-	TpSchedfork   *ebpf.Program `ebpf:"tp_schedfork"`
-	TpSetuid      *ebpf.Program `ebpf:"tp_setuid"`
+	LsmBprmCheck         *ebpf.Program `ebpf:"lsm_bprm_check"`
+	LsmFileOpen          *ebpf.Program `ebpf:"lsm_file_open"`
+	LsmPtraceAccessCheck *ebpf.Program `ebpf:"lsm_ptrace_access_check"`
+	TpConnect            *ebpf.Program `ebpf:"tp_connect"`
+	TpExecve             *ebpf.Program `ebpf:"tp_execve"`
+	TpInitModule         *ebpf.Program `ebpf:"tp_init_module"`
+	TpMemfdCreate        *ebpf.Program `ebpf:"tp_memfd_create"`
+	TpOpenat             *ebpf.Program `ebpf:"tp_openat"`
+	TpOpenat2            *ebpf.Program `ebpf:"tp_openat2"`
+	TpPtrace             *ebpf.Program `ebpf:"tp_ptrace"`
+	TpSchedexec          *ebpf.Program `ebpf:"tp_schedexec"`
+	TpSchedfork          *ebpf.Program `ebpf:"tp_schedfork"`
+	TpSetuid             *ebpf.Program `ebpf:"tp_setuid"`
 }
 
 func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.LsmBprmCheck,
 		p.LsmFileOpen,
+		p.LsmPtraceAccessCheck,
 		p.TpConnect,
 		p.TpExecve,
 		p.TpInitModule,

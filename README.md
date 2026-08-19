@@ -26,6 +26,7 @@ it, a BPF LSM hook:
 | `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
 | `BLOCKED_WRITE` | `lsm/file_open` | LSM file hook pre-emptively drops writes (`-EPERM`) on `blocked_write_paths` |
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
+| `PTRACE_BLOCKED`|`ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
@@ -40,6 +41,7 @@ it, a BPF LSM hook:
 - **PREVENTION**: When LSM hooks attach and `enforcement_enabled: true`:
   - **Exec Prevention**: `bprm_check_security` drops blocked binaries (`-EPERM`).
   - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
+  - **Ptrace Prevention**: When `ptrace_enforcement_enabled`: true and LSM hooks are active, `lsm/ptrace_access_check` blocks unauthorized injection attempts unless the caller matches the `allowed_ptrace_attaches` whitelist.
 
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading
@@ -86,6 +88,9 @@ Example config:
   "blocked_write_paths": ["/etc/passwd"],
 
   "ignored_connect_comms": ["docker"],
+
+  "ptrace_enforcement_enabled": true,
+  "allowed_ptrace_attaches": [ "gdb", "dlv"],
 
   "proc_path": "/proc",
   "cgroup_path": "/sys/fs/cgroup",
@@ -198,6 +203,10 @@ K-Guard will never `SIGKILL`:
 Kills go through `pidfd_open` + `pidfd_send_signal` rather than a raw
 `kill()` by PID, so a PID that has already exited and been recycled by
 the kernel for an unrelated process can't be killed by mistake.
+
+## Testing & Troubleshooting
+
+**Testing LSM Hooks Note** : When testing security hooks like `PTRACE`, keep kernel credential checks (`__ptrace_may_access`) in mind. Non-root users targeting root processes (like PID 1) will be rejected by the kernel with `-EPERM` before reaching the eBPF LSM layer. To test eBPF-level dropping and event emission correctly, run tests with appropriate capabilities/root or target processes owned by the same user.
 
 ## Running
 

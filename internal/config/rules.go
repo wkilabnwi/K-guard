@@ -122,6 +122,10 @@ type Config struct {
 	SensitiveWritePaths []string `json:"sensitive_write_paths,omitempty"`
 	BlockedWritePaths   []string `json:"blocked_write_paths,omitempty"`
 
+	// Ptrace Specific
+	PtraceEnforcementEnabled bool     `json:"ptrace_enforcement_enabled"`
+	AllowedPtraceAttached    []string `json:"allowed_ptrace_attaches,omitempty"`
+
 	// K8s specific
 	KubeletURL      string `json:"kubelet_url,omitempty"`
 	ProcPath        string `json:"proc_path,omitempty"`

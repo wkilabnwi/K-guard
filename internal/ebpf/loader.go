@@ -3,8 +3,6 @@ package ebpf
 import (
 	"fmt"
 	"log"
-	"path/filepath"
-	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -12,7 +10,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type event_hdr -type exec_event -type connect_event -type open_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -108,6 +106,18 @@ func NewManager() (*Manager, error) {
 		log.Println("[ebpf] WARNING: LsmFileOpen object is nil in compiled BPF objects!")
 	}
 
+	if m.Objects.LsmPtraceAccessCheck != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmPtraceAccessCheck})
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM Ptrace Access check enforcement hook failed to attach: %v", aerr)
+		} else {
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM Ptrace Access enforcement hook attached, write blocking is ACTIVE.")
+		}
+	} else {
+		log.Println("[ebpf] WARNING: LsmFileOpen object is nil in compiled BPF objects!")
+	}
+
 	if !m.LSMEnabled {
 		log.Println("[ebpf] NOTE: without the LSM hook, K-Guard can only react after a binary has already started executing, not prevent the exec outright.")
 	}
@@ -146,20 +156,50 @@ func (m *Manager) SetEnforcement(enabled bool) error {
 	return m.Objects.EnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
 }
 
+func (m *Manager) SetPtraceEnforcement(enabled bool) error {
+	if m.Objects.PtraceEnforcementEnabled == nil {
+		return nil
+	}
+	//uint8 because C code only acccepts a byte, should've thought about it earlier
+	var v uint8
+	if enabled {
+		v = 1
+	}
+	return m.Objects.PtraceEnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
+}
+
 // This is the Sync Helper function, it syncs the paths with
 // whichever Map it's linked to
 // If you're asking, why don't we delete everything then insert
 // to same perf, deleting everything leavs a little amount of time
 // where a binary that could be blocked isn't in the list, so we
 // avoid that
-func syncFixedPaths(em *ebpf.Map, paths []string) error {
+func syncPaths(em *ebpf.Map, items []string, is64Byte bool) error {
 	if em == nil {
 		return nil
 	}
 
-	existingSet := make(map[[256]byte]bool)
-	var key [256]byte
+	if is64Byte {
+		return syncTypedMap(em, items, func(s string) [64]byte {
+			var k [64]byte
+			copy(k[:], s)
+			return k
+		})
+	}
+
+	return syncTypedMap(em, items, func(s string) [256]byte {
+		var k [256]byte
+		copy(k[:], s)
+		return k
+	})
+}
+
+// syncTypedMap centralizes all common iteration, diffing, and syncing logic
+func syncTypedMap[K comparable](em *ebpf.Map, items []string, fromString func(string) K) error {
+	existingSet := make(map[K]bool)
+	var key K
 	var val uint8
+
 	it := em.Iterate()
 	for it.Next(&key, &val) {
 		existingSet[key] = true
@@ -168,36 +208,22 @@ func syncFixedPaths(em *ebpf.Map, paths []string) error {
 		return fmt.Errorf("iterating map: %w", err)
 	}
 
-	want := make(map[[256]byte]bool, len(paths)*2)
-	for _, p := range paths {
-		if p == "" {
+	want := make(map[K]bool, len(items))
+	for _, item := range items {
+		if item == "" {
 			continue
 		}
-
-		hasSlash := strings.HasSuffix(p, "/")
-		cleanP := filepath.Clean(p)
-		if hasSlash && !strings.HasSuffix(cleanP, "/") {
-			cleanP += "/"
-		}
-
-		want[pathToKey(cleanP)] = true
-
-		// Resolve symlinks for both binaries AND folders (/var/run/ - > /run/)
-		if realP, err := filepath.EvalSymlinks(p); err == nil {
-			if hasSlash && !strings.HasSuffix(realP, "/") {
-				realP += "/"
-			}
-			if realP != cleanP {
-				want[pathToKey(realP)] = true
-			}
-		}
+		want[fromString(item)] = true
 	}
 
+	// Remove keys that are no longer wanted
 	for k := range existingSet {
 		if !want[k] {
 			_ = em.Delete(k)
 		}
 	}
+
+	// Add missing keys
 	for k := range want {
 		if !existingSet[k] {
 			if err := em.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
@@ -205,23 +231,28 @@ func syncFixedPaths(em *ebpf.Map, paths []string) error {
 			}
 		}
 	}
+
 	return nil
 }
 
 func (m *Manager) SyncBlockedPaths(paths []string) error {
-	return syncFixedPaths(m.Objects.BlockedPaths, paths)
+	return syncPaths(m.Objects.BlockedPaths, paths, false)
 }
 
 func (m *Manager) SyncSuspiciousPaths(paths []string) error {
-	return syncFixedPaths(m.Objects.SuspiciousPaths, paths)
+	return syncPaths(m.Objects.SuspiciousPaths, paths, false)
 }
 
 func (m *Manager) SyncSensitiveWritePaths(paths []string) error {
-	return syncFixedPaths(m.Objects.SensitiveWritePaths, paths)
+	return syncPaths(m.Objects.SensitiveWritePaths, paths, false)
 }
 
 func (m *Manager) SyncBlockedWritePaths(paths []string) error {
-	return syncFixedPaths(m.Objects.BlockedWritePaths, paths)
+	return syncPaths(m.Objects.BlockedWritePaths, paths, false)
+}
+
+func (m *Manager) SyncAllowedPtraceAttached(paths []string) error {
+	return syncPaths(m.Objects.AllowedPtraceAttaches, paths, true)
 }
 
 func pathToKey(p string) [256]byte {

@@ -65,8 +65,17 @@ func (e *Engine) applyConfig(c *config.Config) {
 		log.Printf("[engine] failed to sync Suspicious write Paths: %v", err)
 	}
 	if err := e.ebpfMgr.SyncBlockedWritePaths(c.BlockedWritePaths); err != nil {
-		log.Printf("[engine] faile to sync Blocked write Paths: %v", err)
+		log.Printf("[engine] failed to sync Blocked write Paths: %v", err)
 	}
+	if err := e.ebpfMgr.SyncAllowedPtraceAttached(c.AllowedPtraceAttached); err != nil {
+		log.Printf("[engine] faile to sync Allowed Ptrace Attaches: %v", err)
+	}
+
+	wantPtraceEnforcement := c.PtraceEnforcementEnabled
+	if err := e.ebpfMgr.SetPtraceEnforcement(wantPtraceEnforcement); err != nil {
+		log.Printf("[engine] failed to set Ptrace enforcement kill-switch: %v", err)
+	}
+
 	wantEnforcement := c.EnforcementEnabled && e.ebpfMgr.LSMEnabled
 	if c.EnforcementEnabled && !e.ebpfMgr.LSMEnabled {
 		log.Printf("[engine] config requests enforcement_enabled=true, but the LSM hook is not active on this kernel/build, staying in detect-only mode. See bpf/include/README.md.")
@@ -293,6 +302,29 @@ func (e *Engine) AnalyzeWriteBlocked(comm, filename string, pid, ppid, uid, gid 
 		AncestorSuspicious: ancestorSuspicious,
 		AncestorFilename:   ancestorFilename,
 		PathTruncated:      pathTruncated,
+		Detail:             detail,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+func (e *Engine) AnalyzePtraceBlocked(comm, targetComm string, targetPid, mode, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow("ptrace_blocked|" + strconv.Itoa(int(pid)) + "|" + strconv.Itoa(int(targetPid))) {
+		return
+	}
+	e.metrics.IncBlock()
+
+	detail := fmt.Sprintf("BLOCKED ptrace request mode=0x%x targeting pid=%d (comm='%s')", mode, targetPid, targetComm)
+
+	a := alert.Alert{
+		Severity:  string(config.SeverityCritical),
+		Action:    string(config.ActionAlert),
+		Blocked:   true,
+		EventType: "PTRACE_BLOCKED",
+		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
+		Comm: comm, CgroupID: cgroupID, Filename: targetComm,
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
 		Detail:             detail,
 	}
 

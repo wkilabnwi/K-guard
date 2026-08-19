@@ -176,6 +176,24 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			comm, filename, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
 			hdr.CgroupId, ancestorSuspicious, ancestorFilename, pathTruncated,
 		)
+
+	case kebpf.EventPtraceBlocked:
+		var evt kebpf.BPFPtraceEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		targetComm := int8ToString(evt.TargetComm[:])
+		if targetComm == "" {
+			targetComm = "UNKNOWN"
+		}
+
+		r.engine.AnalyzePtraceBlocked(
+			comm, targetComm, uint32(evt.TargetPid), uint32(evt.Mode),
+			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, hdr.CgroupId,
+			ancestorSuspicious, ancestorFilename,
+		)
 	}
 
 }

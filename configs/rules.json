@@ -74,6 +74,8 @@
   "sensitive_write_paths": ["/tmp/"],
   "blocked_write_paths" : ["/tmp/serbs.txt"],
 
+  "ptrace_enforcement_enabled": true,
+  "allowed_ptrace_attaches": ["gdb", "strace", "systemd-coredump"],
 
   "enforcement_enabled": true,
   "dedup_window_seconds": 10,

@@ -14,6 +14,7 @@ const (
 	EventMemfd          EventType = 8  // memfd_create(), fileless-exec precursor
 	EventSensitiveWrite EventType = 9  // open() with write on a protected  path
 	EventWriteBlocked   EventType = 10 // for blocked write events
+	EventPtraceBlocked  EventType = 11 // for blocked ptrace events
 )
 
 func (t EventType) String() string {
@@ -38,6 +39,8 @@ func (t EventType) String() string {
 		return "SENSITIVE_WRITE"
 	case EventWriteBlocked:
 		return "WRITE_BLOCKED"
+	case EventPtraceBlocked:
+		return "PTRACE_BLOCKED"
 	default:
 		return "UNKNOWN"
 	}

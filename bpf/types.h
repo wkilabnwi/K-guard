@@ -15,6 +15,7 @@
 #define EVT_MEMFD         8  // memfd_create(), fileless-exec precursor 
 #define EVT_SENSITIVE_WRITE 9 // reserved for write events
 #define EVT_BLOCKED_WRITE 10 // for blocked write events
+#define EVENT_PTRACE_BLOCKED 11 // saved for blocked ptrace events
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -69,10 +70,19 @@ struct open_event {
     __u8 path_truncated;
 };
 
+struct ptrace_event {
+    struct event_hdr hdr;
+    __u32 target_pid;
+    __u32 mode;
+    char caller_comm[64];
+    char target_comm[64];
+};
+
 struct event_hdr *unused_event_hdr __attribute__((unused));
 struct exec_event *unused_exec_event __attribute__((unused));
 struct connect_event *unused_connect_event __attribute__((unused));
 struct open_event *unused_open_event __attribute__((unused));
+struct ptrace_event *unused_ptrace_event __attribute__((unused));
 
 // Process lineage state carried per PID
 struct process_lineage {
