@@ -6,6 +6,18 @@
 
 // HELPERS
 
+static __always_inline void emit_sensitive_write_event(char *path, __u8 truncated) {
+    struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return;
+
+    fill_common(&e->hdr, EVT_BLOCKED_WRITE);
+    __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
+    e->path_truncated = truncated;
+    e->isFileless = 0;
+
+    bpf_ringbuf_submit(e, 0);
+}
+
 // Shared helper to evaluate and submit open/write security events
 static __always_inline void handle_open_checks(char *path, __u8 truncated, int flags) {
     int write_intent = (flags & O_ACCMODE_MASK) == O_WRONLY_ ||
@@ -145,6 +157,41 @@ struct syscall_write_args {
 
 
 
+SEC("lsm/file_open")
+int BPF_PROG(lsm_file_open, struct file *file) {
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&enforcement_enabled, &zero);
+    if (!enabled || *enabled == 0) return 0;
+
+    unsigned int f_flags = BPF_CORE_READ(file, f_flags);
+
+    // Check if the file is being opened for writing
+    int write_intent = (f_flags & O_ACCMODE_MASK) == O_WRONLY_ ||
+                       (f_flags & O_ACCMODE_MASK) == O_RDWR_;
+    if (!write_intent) {
+        return 0;
+    }
+
+    // Resolve the absolute path 
+    struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
+    if (!scratch) return 0;
+
+    char *path = scratch->primary;
+    __builtin_memset(path, 0, PATH_BUF_SIZE);
+    __u8 truncated = 0;
+
+    if (get_safe_path(&file->f_path, path, PATH_BUF_SIZE, &truncated) < 0) {
+        return 0;
+    }
+
+    __u8 *sensitive = bpf_map_lookup_elem(&blocked_write_paths, path);
+    if (sensitive && *sensitive == 1) {
+        emit_sensitive_write_event(path, truncated);
+        return -1; 
+    }
+
+    return 0;
+}
 
 
 #endif 

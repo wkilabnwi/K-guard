@@ -45,6 +45,6 @@ func (StdoutSink) Send(a Alert) {
 	} else if a.Action == "KILL" {
 		fmt.Printf("   | Response: TERMINATED\n")
 	} else if a.Blocked {
-		fmt.Printf("   | Response: EXEC BLOCKED PRE-FLIGHT\n")
+		fmt.Printf("   | Response: BLOCKED PRE-FLIGHT\n")
 	}
 }

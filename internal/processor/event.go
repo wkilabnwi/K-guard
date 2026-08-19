@@ -162,7 +162,22 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 	case kebpf.EventModuleLoad:
 		r.engine.AnalyzeGeneric("MODULE_LOAD", config.SeverityCritical, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", "", ancestorSuspicious, ancestorFilename, false)
+	case kebpf.EventWriteBlocked:
+		var evt kebpf.BPFOpenEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		filename := int8ToString(evt.Filename[:])
+		pathTruncated := evt.PathTruncated == 1
+
+		r.engine.AnalyzeWriteBlocked(
+			comm, filename, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
+			hdr.CgroupId, ancestorSuspicious, ancestorFilename, pathTruncated,
+		)
 	}
+
 }
 
 // This function is used to handle C type strings ending with \x00

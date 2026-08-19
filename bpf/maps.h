@@ -66,4 +66,11 @@ struct {
 
 }   exec_scratch_map SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 512);
+    __type(key, char[PATH_BUF_SIZE]);
+    __type(value, __u8);
+} blocked_write_paths SEC(".maps");
+
 #endif

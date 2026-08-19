@@ -24,6 +24,7 @@ it, a BPF LSM hook:
 | `CONNECT` | `sys_enter_connect` | Outbound connections : IPv4, IPv6, and Unix domain sockets |
 | `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
 | `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
+| `BLOCKED_WRITE` | `lsm/file_open` | LSM file hook pre-emptively drops writes (`-EPERM`) on `blocked_write_paths` |
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
@@ -36,11 +37,9 @@ it, a BPF LSM hook:
   kernels/builds without `CONFIG_BPF_LSM` support. K-Guard reacts to an
   exec after the fact: it alerts and, for `KILL`/`BLOCK` rules, sends
   `SIGKILL` to the offending PID via `pidfd`.
-- **PREVENTION** : when the LSM hook attaches successfully *and*
-  `enforcement_enabled: true` is set in config, `BLOCK`-action rules
-  matched by exact path are synced into an in-kernel hash map and the
-  `bprm_check_security` hook returns `-EPERM` before the kernel ever
-  commits to the exec. No process ever runs, so there's nothing to kill.
+- **PREVENTION**: When LSM hooks attach and `enforcement_enabled: true`:
+  - **Exec Prevention**: `bprm_check_security` drops blocked binaries (`-EPERM`).
+  - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
 
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading
@@ -82,7 +81,9 @@ Example config:
   "protected_comms": ["sshd", "systemd"],
 
   "suspicious_path": ["/testkill/", "/tmp/"],
+
   "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
+  "blocked_write_paths": ["/etc/passwd"],
 
   "ignored_connect_comms": ["docker"],
 
@@ -115,7 +116,7 @@ Outbound connects from processes listed in `ignored_connect_comms`
 any loopback destinations (`127.0.0.0/8`, `::1`), both are near-always
 background/tunnel noise rather than signal worth alerting on.
 
-`sensitive_write_paths` are matched independently of the rule list: any `openat/openat2` call with write intent (`O_WRONLY` or `O_RDWR`) whose target falls under one of these paths raises a `SENSITIVE_WRITE` alert at `critical` severity. Duplicate events for the same PID remain subject to `dedup_window_seconds`. Path matching checks the exact path first, then walks up directory prefixes in kernel-space.
+`sensitive_write_paths` raise a `SENSITIVE_WRITE` alert (audit/detect only). By contrast, `blocked_write_paths` are synced into an in-kernel BPF map where the `lsm/file_open` hook actively drops the system call with `-EPERM` if any process tries to open them with write intent.
 
 When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.

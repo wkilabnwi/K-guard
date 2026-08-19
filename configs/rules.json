@@ -30,11 +30,11 @@
       "action": "BLOCK"
     },
     {
-      "name": "Crypto miner (xmrig) : any path, detect+kill",
-      "match": "basename",
-      "pattern": "xmrig",
+      "name": "Crypto miner (xmrig) : tmp path hard block",
+      "match": "exact_path",
+      "pattern": "/tmp/xmrig",
       "severity": "critical",
-      "action": "ALERT"
+      "action": "BLOCK"
     },
     {
       "name": "Raw socket sniffer (tcpdump) outside admin allowlist",
@@ -70,7 +70,10 @@
   "protected_comms": ["sshd", "systemd", "systemd-journald"],
   "suspicious_path": ["/testkill/", "/tmp/"],
   "ignored_connect_comms": ["sshd", "docker", "k3s-server"],
+
   "sensitive_write_paths": ["/tmp/"],
+  "blocked_write_paths" : ["/tmp/serbs.txt"],
+
 
   "enforcement_enabled": true,
   "dedup_window_seconds": 10,

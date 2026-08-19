@@ -93,6 +93,19 @@ func NewManager() (*Manager, error) {
 	} else {
 		log.Println("[ebpf] LSM enforcement program not present in the compiled object (built without vmlinux.h) - " +
 			"running in DETECT-ONLY mode. See bpf/include/README.md to enable real pre-exec blocking.")
+
+	}
+
+	if m.Objects.LsmFileOpen != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmFileOpen})
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM file open/write enforcement hook failed to attach: %v", aerr)
+		} else {
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM file-write enforcement hook attached, write blocking is ACTIVE.")
+		}
+	} else {
+		log.Println("[ebpf] WARNING: LsmFileOpen object is nil in compiled BPF objects!")
 	}
 
 	if !m.LSMEnabled {
@@ -205,6 +218,10 @@ func (m *Manager) SyncSuspiciousPaths(paths []string) error {
 
 func (m *Manager) SyncSensitiveWritePaths(paths []string) error {
 	return syncFixedPaths(m.Objects.SensitiveWritePaths, paths)
+}
+
+func (m *Manager) SyncBlockedWritePaths(paths []string) error {
+	return syncFixedPaths(m.Objects.BlockedWritePaths, paths)
 }
 
 func pathToKey(p string) [256]byte {

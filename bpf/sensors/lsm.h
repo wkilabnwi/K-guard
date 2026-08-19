@@ -17,6 +17,7 @@ static __always_inline void emit_exec_event(__u32 type, char *path, __u8 truncat
     if (!e) return;
 
     fill_common(&e->hdr, type);
+    read_process_args(e);
     __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
     e->isFileless = is_fileless;
     e->path_truncated = truncated;

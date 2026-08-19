@@ -120,6 +120,7 @@ type Config struct {
 	IgnoredConnectComms []string `json:"ignored_connect_comms,omitempty"`
 
 	SensitiveWritePaths []string `json:"sensitive_write_paths,omitempty"`
+	BlockedWritePaths   []string `json:"blocked_write_paths,omitempty"`
 
 	// K8s specific
 	KubeletURL      string `json:"kubelet_url,omitempty"`

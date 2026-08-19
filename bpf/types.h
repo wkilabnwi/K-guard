@@ -14,6 +14,7 @@
 #define EVT_MODULE_LOAD   7  // init_module()/finit_module() 
 #define EVT_MEMFD         8  // memfd_create(), fileless-exec precursor 
 #define EVT_SENSITIVE_WRITE 9 // reserved for write events
+#define EVT_BLOCKED_WRITE 10 // for blocked write events
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001

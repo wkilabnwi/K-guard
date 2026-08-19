@@ -112,6 +112,7 @@ type BPFSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFProgramSpecs struct {
 	LsmBprmCheck  *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
+	LsmFileOpen   *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
 	TpConnect     *ebpf.ProgramSpec `ebpf:"tp_connect"`
 	TpExecve      *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule  *ebpf.ProgramSpec `ebpf:"tp_init_module"`
@@ -129,6 +130,7 @@ type BPFProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFMapSpecs struct {
 	BlockedPaths        *ebpf.MapSpec `ebpf:"blocked_paths"`
+	BlockedWritePaths   *ebpf.MapSpec `ebpf:"blocked_write_paths"`
 	EnforcementEnabled  *ebpf.MapSpec `ebpf:"enforcement_enabled"`
 	ExecScratchMap      *ebpf.MapSpec `ebpf:"exec_scratch_map"`
 	LineageMap          *ebpf.MapSpec `ebpf:"lineage_map"`
@@ -158,6 +160,7 @@ func (o *BPFObjects) Close() error {
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFMaps struct {
 	BlockedPaths        *ebpf.Map `ebpf:"blocked_paths"`
+	BlockedWritePaths   *ebpf.Map `ebpf:"blocked_write_paths"`
 	EnforcementEnabled  *ebpf.Map `ebpf:"enforcement_enabled"`
 	ExecScratchMap      *ebpf.Map `ebpf:"exec_scratch_map"`
 	LineageMap          *ebpf.Map `ebpf:"lineage_map"`
@@ -170,6 +173,7 @@ type BPFMaps struct {
 func (m *BPFMaps) Close() error {
 	return _BPFClose(
 		m.BlockedPaths,
+		m.BlockedWritePaths,
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
 		m.LineageMap,
@@ -185,6 +189,7 @@ func (m *BPFMaps) Close() error {
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFPrograms struct {
 	LsmBprmCheck  *ebpf.Program `ebpf:"lsm_bprm_check"`
+	LsmFileOpen   *ebpf.Program `ebpf:"lsm_file_open"`
 	TpConnect     *ebpf.Program `ebpf:"tp_connect"`
 	TpExecve      *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule  *ebpf.Program `ebpf:"tp_init_module"`
@@ -200,6 +205,7 @@ type BPFPrograms struct {
 func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.LsmBprmCheck,
+		p.LsmFileOpen,
 		p.TpConnect,
 		p.TpExecve,
 		p.TpInitModule,

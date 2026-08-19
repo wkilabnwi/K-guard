@@ -7,27 +7,7 @@
 #include "../types.h"
 #include "../helpers.h"
 
-// Helpers 
-static __always_inline void read_process_args(struct exec_event *e) {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    struct mm_struct *mm = BPF_CORE_READ(task, mm);
-    if (!mm) return;
-
-    unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
-    unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
-    unsigned long len = arg_end - arg_start;
-
-    if (len == 0) return;
-
-    if (len > sizeof(e->args) - 2) {
-        len = sizeof(e->args) - 2;
-    }
-
-    if (bpf_probe_read_user(e->args, len, (const void *)arg_start) == 0) {
-        e->args[len] = 0x00;
-        e->args[len + 1] = 0x00;
-    }
-}
+// Helpers
 
 // Helper to handle lineage updates when a suspicious binary is executed
 static __always_inline void handle_suspicious_lineage(struct exec_event *e, struct scratch_buffer *scratch) {

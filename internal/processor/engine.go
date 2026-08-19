@@ -64,6 +64,9 @@ func (e *Engine) applyConfig(c *config.Config) {
 	if err := e.ebpfMgr.SyncSensitiveWritePaths(c.SensitiveWritePaths); err != nil {
 		log.Printf("[engine] failed to sync Suspicious write Paths: %v", err)
 	}
+	if err := e.ebpfMgr.SyncBlockedWritePaths(c.BlockedWritePaths); err != nil {
+		log.Printf("[engine] faile to sync Blocked write Paths: %v", err)
+	}
 	wantEnforcement := c.EnforcementEnabled && e.ebpfMgr.LSMEnabled
 	if c.EnforcementEnabled && !e.ebpfMgr.LSMEnabled {
 		log.Printf("[engine] config requests enforcement_enabled=true, but the LSM hook is not active on this kernel/build, staying in detect-only mode. See bpf/include/README.md.")
@@ -268,6 +271,29 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 		Filename: filename, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 		PathTruncated: pathTruncated,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+func (e *Engine) AnalyzeWriteBlocked(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
+	e.metrics.IncBlock()
+	detail := "write intent blocked pre-flight by blocked_write_paths policy"
+	if pathTruncated {
+		detail += " | path truncated during read"
+	}
+
+	a := alert.Alert{
+		Severity:  string(config.SeverityCritical),
+		Action:    string(config.ActionAlert),
+		Blocked:   true,
+		EventType: "WRITE_BLOCKED",
+		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
+		Comm: comm, CgroupID: cgroupID, Filename: filename,
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		PathTruncated:      pathTruncated,
+		Detail:             detail,
 	}
 
 	e.dispatcher.Dispatch(e.enrichAlert(a))
