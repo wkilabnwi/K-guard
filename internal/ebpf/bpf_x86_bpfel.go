@@ -49,6 +49,12 @@ type BPFExecEvent struct {
 
 type BPFExecScratch struct{ Args [256]int8 }
 
+type BPFKmodEvent struct {
+	Hdr      BPFEventHdr
+	LoadType uint32
+	_        [4]byte
+}
+
 type BPFOpenEvent struct {
 	Hdr           BPFEventHdr
 	Filename      [256]int8
@@ -119,6 +125,8 @@ type BPFSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFProgramSpecs struct {
+	KguardKernelLoadData *ebpf.ProgramSpec `ebpf:"kguard_kernel_load_data"`
+	KguardKernelReadFile *ebpf.ProgramSpec `ebpf:"kguard_kernel_read_file"`
 	LsmBprmCheck         *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
 	LsmFileOpen          *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
 	LsmPtraceAccessCheck *ebpf.ProgramSpec `ebpf:"lsm_ptrace_access_check"`
@@ -141,8 +149,10 @@ type BPFMapSpecs struct {
 	AllowedPtraceAttaches    *ebpf.MapSpec `ebpf:"allowed_ptrace_attaches"`
 	BlockedPaths             *ebpf.MapSpec `ebpf:"blocked_paths"`
 	BlockedWritePaths        *ebpf.MapSpec `ebpf:"blocked_write_paths"`
+	ContainerCgroups         *ebpf.MapSpec `ebpf:"container_cgroups"`
 	EnforcementEnabled       *ebpf.MapSpec `ebpf:"enforcement_enabled"`
 	ExecScratchMap           *ebpf.MapSpec `ebpf:"exec_scratch_map"`
+	KmodEnforcementEnabled   *ebpf.MapSpec `ebpf:"kmod_enforcement_enabled"`
 	LineageMap               *ebpf.MapSpec `ebpf:"lineage_map"`
 	PtraceEnforcementEnabled *ebpf.MapSpec `ebpf:"ptrace_enforcement_enabled"`
 	Rb                       *ebpf.MapSpec `ebpf:"rb"`
@@ -173,8 +183,10 @@ type BPFMaps struct {
 	AllowedPtraceAttaches    *ebpf.Map `ebpf:"allowed_ptrace_attaches"`
 	BlockedPaths             *ebpf.Map `ebpf:"blocked_paths"`
 	BlockedWritePaths        *ebpf.Map `ebpf:"blocked_write_paths"`
+	ContainerCgroups         *ebpf.Map `ebpf:"container_cgroups"`
 	EnforcementEnabled       *ebpf.Map `ebpf:"enforcement_enabled"`
 	ExecScratchMap           *ebpf.Map `ebpf:"exec_scratch_map"`
+	KmodEnforcementEnabled   *ebpf.Map `ebpf:"kmod_enforcement_enabled"`
 	LineageMap               *ebpf.Map `ebpf:"lineage_map"`
 	PtraceEnforcementEnabled *ebpf.Map `ebpf:"ptrace_enforcement_enabled"`
 	Rb                       *ebpf.Map `ebpf:"rb"`
@@ -188,8 +200,10 @@ func (m *BPFMaps) Close() error {
 		m.AllowedPtraceAttaches,
 		m.BlockedPaths,
 		m.BlockedWritePaths,
+		m.ContainerCgroups,
 		m.EnforcementEnabled,
 		m.ExecScratchMap,
+		m.KmodEnforcementEnabled,
 		m.LineageMap,
 		m.PtraceEnforcementEnabled,
 		m.Rb,
@@ -203,6 +217,8 @@ func (m *BPFMaps) Close() error {
 //
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFPrograms struct {
+	KguardKernelLoadData *ebpf.Program `ebpf:"kguard_kernel_load_data"`
+	KguardKernelReadFile *ebpf.Program `ebpf:"kguard_kernel_read_file"`
 	LsmBprmCheck         *ebpf.Program `ebpf:"lsm_bprm_check"`
 	LsmFileOpen          *ebpf.Program `ebpf:"lsm_file_open"`
 	LsmPtraceAccessCheck *ebpf.Program `ebpf:"lsm_ptrace_access_check"`
@@ -220,6 +236,8 @@ type BPFPrograms struct {
 
 func (p *BPFPrograms) Close() error {
 	return _BPFClose(
+		p.KguardKernelLoadData,
+		p.KguardKernelReadFile,
 		p.LsmBprmCheck,
 		p.LsmFileOpen,
 		p.LsmPtraceAccessCheck,

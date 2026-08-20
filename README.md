@@ -29,6 +29,7 @@ it, a BPF LSM hook:
 | `PTRACE_BLOCKED`|`ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
+`KMOD_BLOCKED` | `sys_enter_init_module` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
 | `FILELESS_EXEC` | `lsm/bprm_check_security` | Detected structurally in-kernel via zero-link count (`i_nlink == 0`) on `tmpfs` (`memfd`) |
 
@@ -42,6 +43,7 @@ it, a BPF LSM hook:
   - **Exec Prevention**: `bprm_check_security` drops blocked binaries (`-EPERM`).
   - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
   - **Ptrace Prevention**: When `ptrace_enforcement_enabled`: true and LSM hooks are active, `lsm/ptrace_access_check` blocks unauthorized injection attempts unless the caller matches the `allowed_ptrace_attaches` whitelist.
+  - **Kernel Module Load Prevention**: Intercepts `init_module` calls and blocks them at the kernel boundary when originating from tracked container cgroups registered in the `container_cgroups` BPF map.
 
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading
@@ -91,6 +93,8 @@ Example config:
 
   "ptrace_enforcement_enabled": true,
   "allowed_ptrace_attaches": [ "gdb", "dlv"],
+
+  "kmod_enforcement_enabled": true,
 
   "proc_path": "/proc",
   "cgroup_path": "/sys/fs/cgroup",

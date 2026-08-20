@@ -16,21 +16,75 @@
 
 // HELPERS
 
-static __always_inline void emit_ptrace_event(struct task_struct *child, unsigned int mode, const char *caller_comm, const char *target_comm) {
-    struct ptrace_event *ev = bpf_ringbuf_reserve(&rb, sizeof(*ev), 0);
-    if (!ev) {
+static __always_inline void emit_kmod_event(__u32 type, __u32 load_type) {
+    struct kmod_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
         return;
     }
 
-    fill_common(&ev->hdr, EVENT_PTRACE_BLOCKED);
+    bpf_printk("kguard: in emit kmod before fill commong, id=\n");
 
-    ev->target_pid = BPF_CORE_READ(child, pid);
-    ev->mode = mode;
+    fill_common(&e->hdr, type);
 
-    __builtin_memcpy(ev->caller_comm, caller_comm, sizeof(ev->caller_comm));
-    __builtin_memcpy(ev->target_comm, target_comm, sizeof(ev->target_comm));
+    bpf_printk("kguard: in emit kmod after fill commong, id=\n");
+    
+    // Capture the process attempting the load
+    bpf_get_current_comm(&e->hdr.comm, sizeof(e->hdr.comm));
+    e->load_type = load_type;
 
-    bpf_ringbuf_submit(ev, 0);
+    bpf_printk("kguard: event is being submitted now type is %lu\n", load_type);
+
+    bpf_ringbuf_submit(e, 0);
+}
+
+static __always_inline int handle_kmod_check(int id) {
+    bpf_printk("kguard: handle_kmod_check called, id=%d\n", id);
+    if (id != 2) {
+        return 0; 
+    }
+
+    __u64 cgroup_id = bpf_get_current_cgroup_id();
+    __u8 *is_container = bpf_map_lookup_elem(&container_cgroups, &cgroup_id);
+
+    bpf_printk("kguard: cgroup check -> cgroup_id=%llu, found_in_map=%d\n", 
+               cgroup_id, is_container ? *is_container : 0);
+    
+    if (!is_container) {
+        return 0; 
+    }
+
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&kmod_enforcement_enabled, &zero);
+
+    bpf_printk("kguard: enforcement check -> map_ptr=%p, enabled_val=%d\n", 
+               enabled, enabled ? *enabled : 0);
+
+    if (!enabled || *enabled == 0) {
+        return 0;
+    }
+
+    bpf_printk("kguard: BLOCKING kernel module load for container cgroup=%llu!\n", cgroup_id);
+
+    emit_kmod_event(EVENT_KMOD_BLOCKED, 2);
+
+    return -1;
+}
+
+static __always_inline void emit_ptrace_event(struct task_struct *child, unsigned int mode, const char *caller_comm, const char *target_comm) {
+    struct ptrace_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return;
+    }
+
+    fill_common(&e->hdr, EVENT_PTRACE_BLOCKED);
+
+    e->target_pid = BPF_CORE_READ(child, pid);
+    e->mode = mode;
+
+    __builtin_memcpy(e->caller_comm, caller_comm, sizeof(e->caller_comm));
+    __builtin_memcpy(e->target_comm, target_comm, sizeof(e->target_comm));
+
+    bpf_ringbuf_submit(e, 0);
 }
 
 static __always_inline void emit_exec_event(__u32 type, char *path, __u8 truncated, __u8 is_fileless) {
@@ -137,6 +191,15 @@ int BPF_PROG(lsm_ptrace_access_check, struct task_struct *child, unsigned int mo
     return -1;
 }
 
+SEC("lsm/kernel_read_file")
+int BPF_PROG(kguard_kernel_read_file, struct file *file, enum kernel_read_file_id id, bool contents) {
+    return handle_kmod_check((int)id);
+}
+
+SEC("lsm/kernel_load_data")
+int BPF_PROG(kguard_kernel_load_data, enum kernel_load_data_id id, bool contents) {
+    return handle_kmod_check((int)id);
+}
 
 
 #endif

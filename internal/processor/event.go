@@ -194,6 +194,26 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, hdr.CgroupId,
 			ancestorSuspicious, ancestorFilename,
 		)
+	case kebpf.EventKmodBlocked:
+		var evt kebpf.BPFKmodEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		comm := int8ToString(evt.Hdr.Comm[:])
+
+		r.engine.AnalyzeKmodBlocked(
+			comm,
+			hdr.Pid,
+			hdr.Ppid,
+			hdr.Uid,
+			hdr.Gid,
+			hdr.CgroupId,
+			ancestorSuspicious,
+			ancestorFilename,
+		)
+
 	}
 
 }

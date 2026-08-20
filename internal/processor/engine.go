@@ -76,6 +76,11 @@ func (e *Engine) applyConfig(c *config.Config) {
 		log.Printf("[engine] failed to set Ptrace enforcement kill-switch: %v", err)
 	}
 
+	wantKmodEnforcement := c.KmodEnforcementEnabled
+	if err := e.ebpfMgr.SetKmodEnforcement(wantKmodEnforcement); err != nil {
+		log.Printf("[engine] failed to set kmod enforcement kill-switch: %v", err)
+	}
+
 	wantEnforcement := c.EnforcementEnabled && e.ebpfMgr.LSMEnabled
 	if c.EnforcementEnabled && !e.ebpfMgr.LSMEnabled {
 		log.Printf("[engine] config requests enforcement_enabled=true, but the LSM hook is not active on this kernel/build, staying in detect-only mode. See bpf/include/README.md.")
@@ -323,6 +328,36 @@ func (e *Engine) AnalyzePtraceBlocked(comm, targetComm string, targetPid, mode, 
 		EventType: "PTRACE_BLOCKED",
 		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
 		Comm: comm, CgroupID: cgroupID, Filename: targetComm,
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		Detail:             detail,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+func (e *Engine) AnalyzeKmodBlocked(comm string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow("kmod_blocked|" + strconv.Itoa(int(pid))) {
+		return
+	}
+	e.metrics.IncBlock()
+
+	detail := fmt.Sprintf("Kernel module load or read blocked by LSM policy (comm='%s')", comm)
+	if ancestorSuspicious {
+		detail += fmt.Sprintf(" [triggered via suspicious ancestor: %s]", ancestorFilename)
+	}
+
+	a := alert.Alert{
+		Severity:           string(config.SeverityCritical),
+		Action:             string(config.ActionAlert),
+		Blocked:            true,
+		EventType:          "KMOD_BLOCKED",
+		Pid:                pid,
+		Ppid:               ppid,
+		Uid:                uid,
+		Gid:                gid,
+		Comm:               comm,
+		CgroupID:           cgroupID,
 		AncestorSuspicious: ancestorSuspicious,
 		AncestorFilename:   ancestorFilename,
 		Detail:             detail,

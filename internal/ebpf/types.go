@@ -15,6 +15,7 @@ const (
 	EventSensitiveWrite EventType = 9  // open() with write on a protected  path
 	EventWriteBlocked   EventType = 10 // for blocked write events
 	EventPtraceBlocked  EventType = 11 // for blocked ptrace events
+	EventKmodBlocked    EventType = 12 // for blocked kmod events
 )
 
 func (t EventType) String() string {
@@ -41,6 +42,8 @@ func (t EventType) String() string {
 		return "WRITE_BLOCKED"
 	case EventPtraceBlocked:
 		return "PTRACE_BLOCKED"
+	case EventKmodBlocked:
+		return "KMOD_BLOCKED"
 	default:
 		return "UNKNOWN"
 	}

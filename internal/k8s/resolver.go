@@ -32,6 +32,10 @@ type Resolver struct {
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	sf          singleflight.Group
+
+	// callback for discovered containers to use in the module init
+	// hooks
+	onContainerDiscovered func(cgroupID uint64)
 }
 
 func NewResolver(procPath, sysCgroupPath, kubeletURL string, kubeletInsecure bool, kubeletCertFile, kubeletKeyFile string) *Resolver {
@@ -164,6 +168,10 @@ func (r *Resolver) doResolve(cgroupID uint64, pid uint32) (ContainerContext, boo
 	if ctx.PodName != "" && ctx.Namespace != "" {
 		if cgroupID != 0 {
 			r.cgroupCache.Add(cgroupID, ctx)
+
+			if r.onContainerDiscovered != nil {
+				r.onContainerDiscovered(cgroupID)
+			}
 		}
 		if pid != 0 {
 			r.pidCache.Add(pid, ctx)
@@ -206,4 +214,8 @@ func (r *Resolver) UpdateConfig(c *config.Config) {
 	if r.kubelet != nil {
 		r.kubelet.UpdateConfig(c)
 	}
+}
+
+func (r *Resolver) SetOnContainerDiscovered(fn func(cgroupID uint64)) {
+	r.onContainerDiscovered = fn
 }

@@ -126,6 +126,9 @@ type Config struct {
 	PtraceEnforcementEnabled bool     `json:"ptrace_enforcement_enabled"`
 	AllowedPtraceAttached    []string `json:"allowed_ptrace_attaches,omitempty"`
 
+	// Kmod Specific
+	KmodEnforcementEnabled bool `json:"kmod_enforcement_enabled"`
+
 	// K8s specific
 	KubeletURL      string `json:"kubelet_url,omitempty"`
 	ProcPath        string `json:"proc_path,omitempty"`

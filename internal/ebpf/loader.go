@@ -10,7 +10,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -118,6 +118,30 @@ func NewManager() (*Manager, error) {
 		log.Println("[ebpf] WARNING: LsmFileOpen object is nil in compiled BPF objects!")
 	}
 
+	if m.Objects.KguardKernelReadFile != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardKernelReadFile})
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM kernel_read_file enforcement hook failed to attach: %v", aerr)
+		} else {
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM kernel_read_file enforcement hook attached, module read blocking is ACTIVE.")
+		}
+	} else {
+		log.Println("[ebpf] WARNING: KguardKernelReadFile object is nil in compiled BPF objects!")
+	}
+
+	if m.Objects.KguardKernelLoadData != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardKernelLoadData}) // Note: link.AttachLSM uses link.LSMOptions
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM kernel_load_data enforcement hook failed to attach: %v", aerr)
+		} else {
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM kernel_load_data enforcement hook attached, module load blocking is ACTIVE.")
+		}
+	} else {
+		log.Println("[ebpf] WARNING: KguardKernelLoadData object is nil in compiled BPF objects!")
+	}
+
 	if !m.LSMEnabled {
 		log.Println("[ebpf] NOTE: without the LSM hook, K-Guard can only react after a binary has already started executing, not prevent the exec outright.")
 	}
@@ -166,6 +190,17 @@ func (m *Manager) SetPtraceEnforcement(enabled bool) error {
 		v = 1
 	}
 	return m.Objects.PtraceEnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
+}
+
+func (m *Manager) SetKmodEnforcement(enabled bool) error {
+	if m.Objects.KmodEnforcementEnabled == nil {
+		return nil
+	}
+	var v uint8
+	if enabled {
+		v = 1
+	}
+	return m.Objects.KmodEnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
 }
 
 // This is the Sync Helper function, it syncs the paths with
@@ -253,6 +288,14 @@ func (m *Manager) SyncBlockedWritePaths(paths []string) error {
 
 func (m *Manager) SyncAllowedPtraceAttached(paths []string) error {
 	return syncPaths(m.Objects.AllowedPtraceAttaches, paths, true)
+}
+
+func (m *Manager) AddContainerCgroup(cgroupID uint64) error {
+	if m.Objects.ContainerCgroups == nil {
+		return nil
+	}
+	var val uint8 = 1
+	return m.Objects.ContainerCgroups.Update(&cgroupID, &val, ebpf.UpdateAny)
 }
 
 func pathToKey(p string) [256]byte {

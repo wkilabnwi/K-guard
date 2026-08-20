@@ -65,6 +65,12 @@ func main() {
 	k8sResolver := k8s.NewResolver(cfg.ProcPath, cfg.CgroupPath, cfg.KubeletURL, cfg.KubeletInsecure, cfg.KubeletCertFile, cfg.KubeletKeyFile)
 	defer k8sResolver.Close()
 
+	k8sResolver.SetOnContainerDiscovered(func(cgroupID uint64) {
+		if err := mgr.AddContainerCgroup(cgroupID); err != nil {
+			log.Printf("[main] failed to sync container cgroup %d to eBPF map: %v", cgroupID, err)
+		}
+	})
+
 	if cfg.Sinks.Stdout {
 		dispatcher.Register(alert.StdoutSink{})
 	}
