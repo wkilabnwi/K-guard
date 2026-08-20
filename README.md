@@ -26,10 +26,10 @@ it, a BPF LSM hook:
 | `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
 | `BLOCKED_WRITE` | `lsm/file_open` | LSM file hook pre-emptively drops writes (`-EPERM`) on `blocked_write_paths` |
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
-| `PTRACE_BLOCKED`|`ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
+| `PTRACE_BLOCKED`|`lsm/ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
-`KMOD_BLOCKED` | `sys_enter_init_module` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
+`KMOD_BLOCKED` | `lsm/kernel_read_file, lsm/kernel_load_data` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
 | `FILELESS_EXEC` | `lsm/bprm_check_security` | Detected structurally in-kernel via zero-link count (`i_nlink == 0`) on `tmpfs` (`memfd`) |
 
