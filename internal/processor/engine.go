@@ -90,7 +90,6 @@ func (e *Engine) applyConfig(c *config.Config) {
 	}
 }
 
-// Hardcoded for now, will add logic for config loading tomorrow, i'm feeling so tired lmao
 func isSuspiciousPath(target string, filenames []string) bool {
 	for _, v := range filenames {
 		if strings.HasPrefix(target, v) {
@@ -229,6 +228,8 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			} else {
 				e.metrics.IncKill()
 			}
+			e.dispatcher.Dispatch(e.enrichAlert(a))
+			return
 		}
 		e.dispatcher.Dispatch(e.enrichAlert(a))
 	}

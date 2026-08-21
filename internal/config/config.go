@@ -12,11 +12,37 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
+func checkConfigPermissions(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	mode := fi.Mode()
+	if mode&0022 != 0 {
+		return fmt.Errorf("refusing to load %s: writable by group and/or other (mode %04o), "+
+			"run e.g. chmod 600 %s", path, mode.Perm(), path)
+	}
+
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if uid := os.Getuid(); uid != 0 && int(st.Uid) != uid {
+			return fmt.Errorf("refusing to load %s: owned by uid %d, not the uid K-Guard is running as (%d)", path, st.Uid, uid)
+		}
+	}
+
+	return nil
+}
+
 // Load reads, parses, defaults, and validates a config file in one shot
 func Load(path string) (*Config, error) {
+	if err := checkConfigPermissions(path); err != nil {
+		return nil, err
+	}
+
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)

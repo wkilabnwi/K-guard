@@ -131,6 +131,36 @@ When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
 - **Cross-PID In-Memory Cache**: Hashes are resolved to their canonical disk path and cached in a thread-safe in-memory cache. If multiple processes (across hundreds of PIDs) execute the same binary, only the first process triggers disk I/O, subsequent checks hit RAM instantly.
 
+## Config validation
+
+K-Guard refuses to start (or reload) if the config fails validation.
+Common gotchas:
+
+- **empty strings in path/comm lists.** `suspicious_path`,
+  `sensitive_write_paths`, `blocked_write_paths`, `allowlist`,
+  `protected_comms`, `ignored_connect_comms`, and
+  `allowed_ptrace_attaches` reject `""` entries, an empty pattern
+  would otherwise match every path via comparison, making it a wildcard.
+- **`comm` fields are capped at 15 characters.** `protected_comms`,
+  `ignored_connect_comms`, and `allowed_ptrace_attaches` are matched
+  against the kernel's `comm` field, which is only 15 usable
+  characters (`TASK_COMM_LEN` is 16 bytes including the \0).
+  Many systemd binaries exceed this :
+  (`systemd-journald` -> `systemd-journal`, `systemd-coredump` ->
+  `systemd-coredum`, `systemd-resolved` -> `systemd-resolve`). Check a
+  binary's actual truncated comm before adding it.
+
+## Config file permissions
+
+For the config.json files, K-Guard refuses to read it if :
+
+- It is **not** group, or world-writable (`chmod 600` or stricter).
+- It is owned by the UID K-Guard is running as (skipped when running
+  as root).
+
+A world-writable rules file would let any local user disable
+enforcement or add their own binary to the allowlist.
+
 ## Kubernetes context enrichment
  
 When running on a Kubernetes node, K-Guard resolves each alert's cgroup
@@ -190,12 +220,36 @@ Each sink runs on its own bounded queue and delivery goroutine, so a
 slow or stuck sink only drops alerts for itself, it never blocks the
 ring buffer reader or other sinks.
 
-## Dashboard
+## Dashboard & Metrics
 
-If `sinks.dashboard_listen_addr` is set (and `sinks.store_path` is also
-set, since the dashboard reads its history from the store), a minimal
-stdlib-only web UI is served showing current enforcement mode, active
-sensors, and the most recent alerts, auto-refreshing every 5 seconds.
+Both the dashboard (`sinks.dashboard_listen_addr`) and metrics
+(`sinks.metrics_listen_addr`) HTTP servers support optional bearer-token
+auth. If no token is configured, the server still starts but logs a
+warning and serves without authentification, fine for `127.0.0.1`-only binding
+plus SSH port-forwarding, but might be a problem if the address is reachable from
+elsewhere.
+
+Set a token via config:
+
+```json
+"sinks": {
+  "dashboard_auth_token": "<random token>",
+  "metrics_auth_token": "<random token>"
+}
+```
+
+or, preferably, via environment variables (kept out of the
+permission-checked but still plaintext config file), which take
+precedence over the config value if both are set:
+
+```bash
+export KGUARD_DASHBOARD_TOKEN="$(openssl rand -hex 32)"
+export KGUARD_METRICS_TOKEN="$(openssl rand -hex 32)"
+```
+
+When testing manually using `sudo`, remember `sudo` resets the
+environment by default so use `sudo -E` to keep your exported
+tokens, or source them from a file `sudo` can read as root.
 
 ## Safety guarantees
 

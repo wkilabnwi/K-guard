@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"k-guard/internal/alert"
 	"k-guard/internal/config"
 	"k-guard/internal/dashboard"
+	"k-guard/internal/dashboard/httpauth"
 	kebpf "k-guard/internal/ebpf"
 	k8s "k-guard/internal/k8s"
 	"k-guard/internal/metrics"
@@ -30,6 +32,13 @@ type statusAdapter struct{ mgr *kebpf.Manager }
 
 func (s statusAdapter) ActiveSensors() []string { return s.mgr.ActiveSensors() }
 func (s statusAdapter) LSMEnabled() bool        { return s.mgr.LSMEnabled }
+
+func resolveToken(envVar, cfgVal string) string {
+	if v := os.Getenv(envVar); v != "" {
+		return v
+	}
+	return cfgVal
+}
 
 func main() {
 	configPath := flag.String("config", "configs/rules.json", "path to the JSON rule/policy config file")
@@ -95,22 +104,42 @@ func main() {
 		}
 	}
 
+	var metricsSrv *http.Server
 	if cfg.Sinks.MetricsListenAddr != "" {
+		metricsToken := resolveToken("KGUARD_METRICS_TOKEN", cfg.Sinks.MetricsAuthToken)
+		if metricsToken == "" {
+			log.Printf("[metrics] WARNING: no auth token configured, metrics on %s are unauthenticated. "+
+				"Set sinks.metrics_auth_token (or KGUARD_METRICS_TOKEN) or restrict %s to loopback/a trusted network.",
+				cfg.Sinks.MetricsListenAddr, cfg.Sinks.MetricsListenAddr)
+		}
+
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsRegistry.Handler())
+
+		metricsSrv = &http.Server{
+			Addr:              cfg.Sinks.MetricsListenAddr,
+			Handler:           httpauth.RequireBearer(metricsToken, mux),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
 		go func() {
 			log.Printf("[metrics] listening on %s/metrics", cfg.Sinks.MetricsListenAddr)
-			mux := http.NewServeMux()
-			mux.Handle("/metrics", metricsRegistry.Handler())
-			if err := http.ListenAndServe(cfg.Sinks.MetricsListenAddr, mux); err != nil {
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("[metrics] server stopped: %v", err)
 			}
 		}()
 	}
 
+	var dashboardSrv *dashboard.Server
 	if cfg.Sinks.DashboardListenAddr != "" {
 		if store == nil {
 			log.Printf("[main] dashboard requested but sinks.store_path is not set, dashboard needs the persistent store to show history, skipping dashboard")
 		} else {
-			dashboard.NewServer(cfg.Sinks.DashboardListenAddr, store, statusAdapter{mgr}).Start()
+			dashboardToken := resolveToken("KGUARD_DASHBOARD_TOKEN", cfg.Sinks.DashboardAuthToken)
+			dashboardSrv = dashboard.NewServer(cfg.Sinks.DashboardListenAddr, store, statusAdapter{mgr}, dashboardToken)
+			dashboardSrv.Start()
 		}
 	}
 
@@ -172,5 +201,19 @@ func main() {
 	close(quit)
 	mgr.Reader.Close()
 	wg.Wait()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[metrics] graceful shutdown failed: %v", err)
+		}
+	}
+	if dashboardSrv != nil {
+		if err := dashboardSrv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[dashboard] graceful shutdown failed: %v", err)
+		}
+	}
+
 	dispatcher.Close()
 }

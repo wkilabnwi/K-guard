@@ -90,6 +90,9 @@ type SinksConfig struct {
 	StorePath           string `json:"store_path,omitempty"`
 	MetricsListenAddr   string `json:"metrics_listen_addr,omitempty"`
 	DashboardListenAddr string `json:"dashboard_listen_addr,omitempty"`
+
+	DashboardAuthToken string `json:"dashboard_auth_token,omitempty"`
+	MetricsAuthToken   string `json:"metrics_auth_token,omitempty"`
 }
 
 // Config is the full on-disk K-Guard configuration
@@ -148,6 +151,30 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// 15 because the kernel's comm field is 16 bytes
+// so having anything longer than that means it won't check
+const maxCommLen = 15
+
+// we make sure that these fields don't contain an emoty path,
+// as that ends up matching with everything because of the nature
+// of the strings checking function
+func (c *Config) nonEmptyPathLists() map[string][]string {
+	return map[string][]string{
+		"suspicious_path":       c.SuspiciousPaths,
+		"sensitive_write_paths": c.SensitiveWritePaths,
+		"blocked_write_paths":   c.BlockedWritePaths,
+		"allowlist":             c.Allowlist,
+	}
+}
+
+func (c *Config) commLists() map[string][]string {
+	return map[string][]string{
+		"protected_comms":         c.ProtectedComms,
+		"ignored_connect_comms":   c.IgnoredConnectComms,
+		"allowed_ptrace_attaches": c.AllowedPtraceAttached,
+	}
+}
+
 func (c *Config) Validate() error {
 	for _, r := range c.Rules {
 		if err := r.Validate(); err != nil {
@@ -165,6 +192,25 @@ func (c *Config) Validate() error {
 
 	if (c.KubeletCertFile == "") != (c.KubeletKeyFile == "") {
 		return fmt.Errorf("kubelet_cert_file and kubelet_key_file must both be set or both be empty")
+	}
+
+	for field, entries := range c.nonEmptyPathLists() {
+		for _, p := range entries {
+			if p == "" {
+				return fmt.Errorf("%s: empty string entries are not allowed (an empty pattern matches every path)", field)
+			}
+		}
+	}
+
+	for field, entries := range c.commLists() {
+		for _, comm := range entries {
+			if len(comm) > maxCommLen {
+				return fmt.Errorf("%s: entry %q is longer than %d characters and can never match the kernel's comm field (TASK_COMM_LEN), truncate it", field, comm, maxCommLen)
+			}
+			if comm == "" {
+				return fmt.Errorf("%s: empty string entries are not allowed", field)
+			}
+		}
 	}
 	return nil
 }

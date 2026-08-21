@@ -67,7 +67,7 @@
   "kubelet_key_file": "/var/lib/rancher/k3s/server/tls/client-admin.key",
 
   "protected_pids": [],
-  "protected_comms": ["sshd", "systemd", "systemd-journald"],
+  "protected_comms": ["sshd", "systemd", "systemd-journal"],
   "suspicious_path": ["/testkill/", "/tmp/"],
   "ignored_connect_comms": ["sshd", "docker", "k3s-server"],
 
@@ -75,7 +75,7 @@
   "blocked_write_paths" : ["/tmp/serbs.txt"],
 
   "ptrace_enforcement_enabled": true,
-  "allowed_ptrace_attaches": ["gdb", "strace", "systemd-coredump"],
+  "allowed_ptrace_attaches": ["gdb", "strace", "systemd-coredum"],
 
   "kmod_enforcement_enabled": true,
 

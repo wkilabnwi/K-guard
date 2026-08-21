@@ -4,6 +4,7 @@
 package dashboard
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"html/template"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"k-guard/internal/alert"
+	"k-guard/internal/dashboard/httpauth"
 )
 
 // templatesFS embeds the dashboard's HTML template so it ships inside the
@@ -31,13 +33,19 @@ type StatusProvider interface {
 }
 
 type Server struct {
-	store  *alert.Store
-	status StatusProvider
-	addr   string
+	store     *alert.Store
+	status    StatusProvider
+	addr      string
+	authToken string
+	httpSrv   *http.Server
 }
 
-func NewServer(addr string, store *alert.Store, status StatusProvider) *Server {
-	return &Server{addr: addr, store: store, status: status}
+func NewServer(addr string, store *alert.Store, status StatusProvider, authToken string) *Server {
+	if authToken == "" {
+		log.Printf("[dashboard] WARNING: no auth token configured, dashboard on %s is unauthenticated. "+
+			"Set sinks.dashboard_auth_token (or KGUARD_DASHBOARD_TOKEN) or restrict %s to loopback/a trusted network.", addr, addr)
+	}
+	return &Server{addr: addr, store: store, status: status, authToken: authToken}
 }
 
 func (s *Server) Start() {
@@ -45,12 +53,28 @@ func (s *Server) Start() {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/alerts", s.handleAlertsJSON)
 
+	s.httpSrv = &http.Server{
+		Addr:              s.addr,
+		Handler:           httpauth.RequireBearer(s.authToken, mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	go func() {
 		log.Printf("[dashboard] listening on %s", s.addr)
-		if err := http.ListenAndServe(s.addr, mux); err != nil {
+		if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[dashboard] stopped: %v", err)
 		}
 	}()
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpSrv == nil {
+		return nil
+	}
+	return s.httpSrv.Shutdown(ctx)
 }
 
 type pageData struct {
