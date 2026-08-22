@@ -161,6 +161,12 @@ For the config.json files, K-Guard refuses to read it if :
 A world-writable rules file would let any local user disable
 enforcement or add their own binary to the allowlist.
 
+## Reload diffing
+
+On every hot reload, K-Guard logs what actually changed in the config (rules added/removed/modified,
+allowlist/path/comm list changes, enforcement toggles, etc.) instead of just
+"config reloaded". Auth tokens are never logged, only that they changed.
+
 ## Kubernetes context enrichment
  
 When running on a Kubernetes node, K-Guard resolves each alert's cgroup

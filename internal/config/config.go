@@ -96,6 +96,8 @@ func (m *Manager) OnChange(fn func(*Config)) {
 // ReloadNow rereads the config file immediately, On failure, the previously loaded config is
 // left untouched and the error is returned for the caller to log.
 func (m *Manager) ReloadNow() error {
+	old := m.current.Load()
+
 	c, err := Load(m.path)
 	if err != nil {
 		return err
@@ -106,6 +108,18 @@ func (m *Manager) ReloadNow() error {
 		m.lastMod = fi.ModTime()
 	}
 	m.mu.Unlock()
+
+	if old != nil {
+		if changes := diffConfig(old, c); len(changes) > 0 {
+			log.Printf("[config] reload applied %d change(s):", len(changes))
+			for _, ch := range changes {
+				log.Printf("[config] : %s", ch)
+			}
+		} else {
+			log.Printf("[config] reload: file changed but no effective policy differences detected")
+		}
+	}
+
 	m.notify(c)
 	return nil
 }
