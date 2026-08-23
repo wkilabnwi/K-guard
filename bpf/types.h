@@ -40,6 +40,9 @@ struct event_hdr {
     __u8  ancestor_suspicious;
     char  ancestor_filename[PATH_BUF_SIZE];
 
+    __u64 exe_dev;
+    __u64 exe_ino; 
+
     // this is used for a couple of things
     // will definetely make it right today or
     // tomorrow (or until it breaks)
@@ -107,6 +110,11 @@ struct scratch_buffer {
 
 struct exec_scratch {
     char args[PATH_BUF_SIZE];
+};
+
+struct file_id {
+    __u64 dev;
+    __u64 ino;
 };
 
 #endif

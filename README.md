@@ -82,17 +82,17 @@ Example config:
   "dedup_window_seconds": 10,
 
   "allowlist": ["/usr/bin/ssh"],
-  "protected_comms": ["sshd", "systemd"],
+ "protected_comms": ["/usr/sbin/sshd", "/usr/bin/systemd"],
 
   "suspicious_path": ["/testkill/", "/tmp/"],
 
   "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
   "blocked_write_paths": ["/etc/passwd"],
 
-  "ignored_connect_comms": ["docker"],
+"ignored_connect_comms": ["/usr/bin/dockerd"],
 
   "ptrace_enforcement_enabled": true,
-  "allowed_ptrace_attaches": [ "gdb", "dlv"],
+  "allowed_ptrace_attaches": ["/usr/bin/gdb", "/usr/bin/dlv"],
 
   "kmod_enforcement_enabled": true,
 
@@ -120,8 +120,8 @@ or `(event_type, pid)` for the generic sensors) within
 
 Kernel Lineage & Tree Traceback : eBPF tracks context across child forks while an LRU cache walks `pid` $\rightarrow$ `ppid` entries to reconstruct the full process execution tree on alert.
 
-Outbound connects from processes listed in `ignored_connect_comms`
-(e.g. `["sshd"]`) are filtered before reaching the engine at all, as are
+Outbound connects from processes whose resolved bin matches `ignored_connect_comms`
+(e.g. `["/usr/sbin/sshd"]`) are filtered before reaching the engine at all, as are
 any loopback destinations (`127.0.0.0/8`, `::1`), both are near-always
 background/tunnel noise rather than signal worth alerting on.
 
@@ -141,14 +141,24 @@ Common gotchas:
   `protected_comms`, `ignored_connect_comms`, and
   `allowed_ptrace_attaches` reject `""` entries, an empty pattern
   would otherwise match every path via comparison, making it a wildcard.
-- **`comm` fields are capped at 15 characters.** `protected_comms`,
-  `ignored_connect_comms`, and `allowed_ptrace_attaches` are matched
-  against the kernel's `comm` field, which is only 15 usable
-  characters (`TASK_COMM_LEN` is 16 bytes including the \0).
-  Many systemd binaries exceed this :
-  (`systemd-journald` -> `systemd-journal`, `systemd-coredump` ->
-  `systemd-coredum`, `systemd-resolved` -> `systemd-resolve`). Check a
-  binary's actual truncated comm before adding it.
+- **`protected_comms`, `ignored_connect_comms`**, and
+  `allowed_ptrace_attaches` are absolute paths, not process names.
+  Each configured path is opened once and resolved to a `(device, inode)`
+  identity via a held file descriptor, matching against the real
+  underlying binary rather than the `comm` mutable field, which could
+  be rewritten via `prctl(PR_SET_NAME)` or simply by being exec'd
+  under a different name. Validation rejects any entry that isn't an
+  absolute path.
+- **Symlinks and self-relocating binaries need their stable path**, not a
+  transient one. `os.Open` follows symlinks, so pointing these fields
+  at a maintained symlink (e.g. k3s's
+  `/var/lib/rancher/k3s/data/current/bin/k3s`) is fine and recommended
+  when the underlying binary moves between versions/restarts, pin the
+  symlink, not a path containing a build hash or other value that
+  changes on upgrade. If the pinned target changes on disk without a
+  config reload, K-Guard keeps enforcing against the *old* identity
+  until the next `SIGHUP`/poll reload re-resolves it, noisier, not
+  silently permissive.
 
 ## Config file permissions
 
@@ -166,6 +176,35 @@ enforcement or add their own binary to the allowlist.
 On every hot reload, K-Guard logs what actually changed in the config (rules added/removed/modified,
 allowlist/path/comm list changes, enforcement toggles, etc.) instead of just
 "config reloaded". Auth tokens are never logged, only that they changed.
+
+## Identity-based trust (protected_comms, ignored_connect_comms, allowed_ptrace_attaches)
+
+These three lists used to match against the kernel's `comm` field,
+short, human-readable, and trivially spoofable, since any process can
+rewrite its own `comm` at will and the kernel itself sets `comm` from
+whatever name a binary was exec'd under. K-Guard now resolves each
+configured entry to the real file it points at:
+
+- Each path is opened once (kept pinned via a held file descriptor,
+  not repeatedly re-`stat`'d) and identified by its `(device, inode)`
+  pair : the same identity the kernel's own VFS layer uses.
+- `allowed_ptrace_attaches` is enforced entirely in-kernel: the
+  `ptrace_access_check` LSM hook resolves the *calling* process's own
+  `mm->exe_file` and looks it up directly in a kernel map keyed by
+  `(dev, ino)`.
+- `ignored_connect_comms` is resolved the same way in-kernel, every
+  event's header carries the emitting process's resolved exe identity
+  and checked in userspace.
+- `protected_comms` is checked at the moment of a kill attempt by
+  re-resolving the *live* pid's current `/proc/<pid>/exe`, rather than
+  trusting whatever `comm` the triggering event carried, so a rename or
+  a config change between event and kill can't be exploited either way.
+
+Device numbers are normalized (major/minor decode + kernel-layout
+re-encode) before comparison, since the raw `dev_t` encoding used by
+`stat(2)` in userspace differs from the raw value the kernel exposes
+via `inode->i_sb->s_dev`. All three lists are hot-reloaded the same way
+as everything else, via `SIGHUP`/the 5-second poll.
 
 ## Kubernetes context enrichment
  
@@ -262,7 +301,9 @@ tokens, or source them from a file `sudo` can read as root.
 K-Guard will never `SIGKILL`:
 - PID 1
 - its own PID
-- any PID/comm listed in `protected_pids` / `protected_comms`
+- any PID listed in `protected_pids`, or any process whose live,
+  re-resolved `/proc/<pid>/exe` identity matches a path in
+  `protected_comms`
 
 Kills go through `pidfd_open` + `pidfd_send_signal` rather than a raw
 `kill()` by PID, so a PID that has already exited and been recycled by

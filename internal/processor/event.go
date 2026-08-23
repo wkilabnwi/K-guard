@@ -10,6 +10,7 @@ import (
 	"k-guard/internal/config"
 	kebpf "k-guard/internal/ebpf"
 	"k-guard/internal/metrics"
+	"k-guard/internal/trust"
 )
 
 func isLoopback(ip net.IP) bool {
@@ -32,10 +33,20 @@ type Router struct {
 	engine  *Engine
 	metrics *metrics.Registry
 	cfg     *config.Manager
+
+	ignoredConnect *trust.Set
 }
 
 func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager) *Router {
-	return &Router{engine: engine, metrics: m, cfg: cfg}
+	r := &Router{
+		engine:         engine,
+		metrics:        m,
+		cfg:            cfg,
+		ignoredConnect: trust.NewSet(),
+	}
+	r.applyConfig(cfg.Current())
+	cfg.OnChange(r.applyConfig)
+	return r
 }
 
 // ProcessRawRecord decodes one ring buffer sample and routes it. Decode
@@ -84,7 +95,8 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		)
 
 	case kebpf.EventConnect:
-		if isIgnoredComm(r.cfg.Current().IgnoredConnectComms, comm) {
+		exeID := trust.FileID{Dev: hdr.ExeDev, Ino: hdr.ExeIno}
+		if r.ignoredConnect.Contains(exeID) {
 			return
 		}
 
@@ -267,4 +279,8 @@ func parseArgs(bs []int8) string {
 		b = append(b, byte(v))
 	}
 	return string(bytes.TrimSpace(b))
+}
+
+func (r *Router) applyConfig(c *config.Config) {
+	r.ignoredConnect.Sync(c.IgnoredConnectComms, "ignored_connect_comms")
 }

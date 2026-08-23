@@ -67,15 +67,15 @@
   "kubelet_key_file": "/var/lib/rancher/k3s/server/tls/client-admin.key",
 
   "protected_pids": [],
-  "protected_comms": ["sshd", "systemd", "systemd-journal"],
+  "protected_comms": ["/usr/sbin/sshd", "/usr/bin/systemd"],
   "suspicious_path": ["/testkill/", "/tmp/"],
-  "ignored_connect_comms": ["sshd", "docker", "k3s-server"],
+  "ignored_connect_comms": ["/usr/sbin/sshd", "/usr/bin/docker", "/var/lib/rancher/k3s/data/current/bin/k3s"],
 
   "sensitive_write_paths": ["/tmp/"],
   "blocked_write_paths" : ["/tmp/serbs.txt"],
 
   "ptrace_enforcement_enabled": true,
-  "allowed_ptrace_attaches": ["gdb", "strace", "systemd-coredum"],
+  "allowed_ptrace_attaches": ["/usr/bin/systemd"],
 
   "kmod_enforcement_enabled": true,
 

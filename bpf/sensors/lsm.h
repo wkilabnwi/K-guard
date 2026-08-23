@@ -169,20 +169,23 @@ int BPF_PROG(lsm_ptrace_access_check, struct task_struct *child, unsigned int mo
     __u32 zero = 0;
     __u8 *enabled = bpf_map_lookup_elem(&ptrace_enforcement_enabled, &zero);
     if (!enabled || *enabled == 0) {
-        return 0; 
+        return 0;
     }
 
     if (mode & PTRACE_MODE_READ) {
-        return 0; 
+        return 0;
+    }
+
+    struct file_id caller_id;
+    if (get_current_exe_id(&caller_id) == 0) {
+        __u8 *allowed = bpf_map_lookup_elem(&allowed_ptrace_attaches, &caller_id);
+        if (allowed && *allowed == 1) {
+            return 0;
+        }
     }
 
     char caller_comm[64];
     bpf_get_current_comm(&caller_comm, sizeof(caller_comm));
-
-    __u8 *allowed = bpf_map_lookup_elem(&allowed_ptrace_attaches, caller_comm);
-    if (allowed && *allowed == 1) {
-        return 0;
-    }
 
     char target_comm[64];
     BPF_CORE_READ_STR_INTO(&target_comm, child, comm);

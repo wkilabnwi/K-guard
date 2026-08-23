@@ -5,8 +5,10 @@ package safety
 
 import (
 	"fmt"
+	"k-guard/internal/trust"
 	"os"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -15,32 +17,43 @@ import (
 // the two that are always implicitly protected: PID 1 and K-Guard's own
 // PID (os.Getpid()).
 type Guard struct {
-	mu             sync.RWMutex
-	protectedPIDs  map[int]bool
-	protectedComms map[string]bool
-	selfPID        int
+	mu            sync.RWMutex
+	protectedPIDs map[int]bool
+	protected     *trust.Set
+	selfPID       int
 }
 
 func NewGuard() *Guard {
 	return &Guard{
-		protectedPIDs:  map[int]bool{},
-		protectedComms: map[string]bool{},
-		selfPID:        os.Getpid(),
+		protectedPIDs: map[int]bool{},
+		protected:     trust.NewSet(),
+		selfPID:       os.Getpid(),
 	}
 }
 
 // SetProtected replaces the configured protected PID/comm list on every hot-reload for example
-func (g *Guard) SetProtected(pids []int, comms []string) {
+func (g *Guard) SetProtected(pids []int, paths []string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	g.protectedPIDs = make(map[int]bool, len(pids))
 	for _, p := range pids {
 		g.protectedPIDs[p] = true
 	}
-	g.protectedComms = make(map[string]bool, len(comms))
-	for _, c := range comms {
-		g.protectedComms[c] = true
+	g.mu.Unlock()
+
+	g.protected.Sync(paths, "protected_comms")
+}
+
+func exeIdentity(pid uint32) (trust.FileID, error) {
+	f, err := os.Open(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return trust.FileID{}, err
 	}
+	defer f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
+		return trust.FileID{}, err
+	}
+	return trust.FileID{Dev: uint64(st.Dev), Ino: st.Ino}, nil
 }
 
 // IsProtected reports whether the given pid/comm must never be killed
@@ -51,15 +64,19 @@ func (g *Guard) IsProtected(pid uint32, comm string) bool {
 	if int(pid) == g.selfPID {
 		return true // never kill ourselves
 	}
+
 	g.mu.RLock()
-	defer g.mu.RUnlock()
-	if g.protectedPIDs[int(pid)] {
+	byPID := g.protectedPIDs[int(pid)]
+	g.mu.RUnlock()
+	if byPID {
 		return true
 	}
-	if g.protectedComms[comm] {
-		return true
+
+	id, err := exeIdentity(pid)
+	if err != nil {
+		return false
 	}
-	return false
+	return g.protected.Contains(id)
 }
 
 // SafeKill sends SIGKILL to kill the process, refusing (with a descriptive error)
@@ -73,13 +90,6 @@ func (g *Guard) SafeKill(pid uint32, comm string) error {
 	if g.IsProtected(pid, comm) {
 		return fmt.Errorf("refusing to kill protected pid %d (%s)", pid, comm)
 	}
-
-	// The usage of PidfdOpen instead of directly killing the program
-	// is due to : in some rare cases a binary excutes and finishes fast
-	// so to defend against the Kernel giving it's pid to another process and us ending
-	// up killing a process that wasn't meant to be killed
-	// but PidfdOpen returns a file descriptor so if even if it isn't valid
-	// we won't end up killing anything that might be useful
 
 	fd, err := unix.PidfdOpen(int(pid), 0)
 	if err != nil {

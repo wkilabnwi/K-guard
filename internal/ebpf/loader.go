@@ -2,7 +2,9 @@ package ebpf
 
 import (
 	"fmt"
+	"k-guard/internal/trust"
 	"log"
+	"os"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -10,7 +12,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -20,6 +22,18 @@ type Manager struct {
 	LSMEnabled bool
 
 	activeSensors []string
+
+	ptraceAllow *trust.Set
+}
+
+type FileID struct {
+	Dev uint64
+	Ino uint64
+}
+
+type pinnedFile struct {
+	f  *os.File
+	id FileID
 }
 
 func NewManager() (*Manager, error) {
@@ -229,20 +243,35 @@ func syncPaths(em *ebpf.Map, items []string, is64Byte bool) error {
 	})
 }
 
-// syncTypedMap centralizes all common iteration, diffing, and syncing logic
-func syncTypedMap[K comparable](em *ebpf.Map, items []string, fromString func(string) K) error {
-	existingSet := make(map[K]bool)
+func syncKeyedMap[K comparable](em *ebpf.Map, want map[K]bool) error {
+	existing := make(map[K]bool)
 	var key K
 	var val uint8
 
 	it := em.Iterate()
 	for it.Next(&key, &val) {
-		existingSet[key] = true
+		existing[key] = true
 	}
 	if err := it.Err(); err != nil {
 		return fmt.Errorf("iterating map: %w", err)
 	}
 
+	for k := range existing {
+		if !want[k] {
+			_ = em.Delete(k)
+		}
+	}
+	for k := range want {
+		if !existing[k] {
+			if err := em.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
+				return fmt.Errorf("updating map: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func syncTypedMap[K comparable](em *ebpf.Map, items []string, fromString func(string) K) error {
 	want := make(map[K]bool, len(items))
 	for _, item := range items {
 		if item == "" {
@@ -250,24 +279,7 @@ func syncTypedMap[K comparable](em *ebpf.Map, items []string, fromString func(st
 		}
 		want[fromString(item)] = true
 	}
-
-	// Remove keys that are no longer wanted
-	for k := range existingSet {
-		if !want[k] {
-			_ = em.Delete(k)
-		}
-	}
-
-	// Add missing keys
-	for k := range want {
-		if !existingSet[k] {
-			if err := em.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
-				return fmt.Errorf("updating map: %w", err)
-			}
-		}
-	}
-
-	return nil
+	return syncKeyedMap(em, want)
 }
 
 func (m *Manager) SyncBlockedPaths(paths []string) error {
@@ -287,7 +299,20 @@ func (m *Manager) SyncBlockedWritePaths(paths []string) error {
 }
 
 func (m *Manager) SyncAllowedPtraceAttached(paths []string) error {
-	return syncPaths(m.Objects.AllowedPtraceAttaches, paths, true)
+	em := m.Objects.AllowedPtraceAttaches
+	if em == nil {
+		return nil
+	}
+	if m.ptraceAllow == nil {
+		m.ptraceAllow = trust.NewSet()
+	}
+	wantIDs := m.ptraceAllow.Sync(paths, "allowed_ptrace_attaches")
+
+	want := make(map[trust.FileID]bool, len(wantIDs))
+	for _, id := range wantIDs {
+		want[id] = true
+	}
+	return syncKeyedMap(em, want)
 }
 
 func (m *Manager) AddContainerCgroup(cgroupID uint64) error {
@@ -312,6 +337,9 @@ func (m *Manager) Close() {
 		if l != nil {
 			l.Close()
 		}
+	}
+	if m.ptraceAllow != nil {
+		m.ptraceAllow.Close()
 	}
 	_ = m.Objects.Close()
 }

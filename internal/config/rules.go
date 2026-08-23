@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 // MatchKind controls how Rule.Pattern is compared against filename/path
 // Prefer the specific kinds over MatchSubstring: substring
@@ -203,12 +206,12 @@ func (c *Config) Validate() error {
 	}
 
 	for field, entries := range c.commLists() {
-		for _, comm := range entries {
-			if len(comm) > maxCommLen {
-				return fmt.Errorf("%s: entry %q is longer than %d characters and can never match the kernel's comm field (TASK_COMM_LEN), truncate it", field, comm, maxCommLen)
-			}
-			if comm == "" {
+		for _, p := range entries {
+			if p == "" {
 				return fmt.Errorf("%s: empty string entries are not allowed", field)
+			}
+			if !filepath.IsAbs(p) {
+				return fmt.Errorf("%s: %q must be an absolute path to a binary (this field now matches on resolved file identity, not process name)", field, p)
 			}
 		}
 	}

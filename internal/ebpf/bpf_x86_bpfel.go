@@ -34,6 +34,8 @@ type BPFEventHdr struct {
 	AncestorSuspicious uint8
 	AncestorFilename   [256]int8
 	_                  [3]byte
+	ExeDev             uint64
+	ExeIno             uint64
 	Ret                int32
 	_                  [4]byte
 }
@@ -48,6 +50,11 @@ type BPFExecEvent struct {
 }
 
 type BPFExecScratch struct{ Args [256]int8 }
+
+type BPFFileId struct {
+	Dev uint64
+	Ino uint64
+}
 
 type BPFKmodEvent struct {
 	Hdr      BPFEventHdr

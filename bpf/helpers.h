@@ -6,6 +6,25 @@
 #include <bpf/bpf_core_read.h>
 
 
+
+static __always_inline int get_current_exe_id(struct file_id *out) {
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    struct mm_struct *mm = BPF_CORE_READ(task, mm);
+    if (!mm) return -1;
+
+    struct file *exe = BPF_CORE_READ(mm, exe_file);
+    if (!exe) return -1;
+
+    struct inode *inode = BPF_CORE_READ(exe, f_inode);
+    if (!inode) return -1;
+
+    out->ino = BPF_CORE_READ(inode, i_ino);
+    out->dev = BPF_CORE_READ(inode, i_sb, s_dev);
+    bpf_printk("kguard: exe dev=%llu ino=%llu\n", out->dev, out->ino);
+    return 0;
+}
+
+
 static __always_inline int path_in_map(const char *path, void *map) {
     __u32 zero = 0;
     struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
@@ -75,6 +94,15 @@ static __always_inline void fill_common(struct event_hdr *e, __u32 evt_type) {
     } else {
         e->ancestor_suspicious = 0;
         __builtin_memset(e->ancestor_filename, 0, sizeof(e->ancestor_filename));
+    }
+
+    struct file_id exe_id;
+    if (get_current_exe_id(&exe_id) == 0) {
+        e->exe_dev = exe_id.dev;
+        e->exe_ino = exe_id.ino;
+    } else {
+        e->exe_dev = 0;
+        e->exe_ino = 0;
     }
 }
 
