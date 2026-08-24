@@ -19,6 +19,7 @@
 #include "sensors/net.h"
 #include "sensors/file.h"
 #include "sensors/sys.h"
+#include "sensors/iouring.h"
 
 
 char _license[] SEC("license") = "GPL";

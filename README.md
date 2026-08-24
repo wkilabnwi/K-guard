@@ -32,6 +32,7 @@ it, a BPF LSM hook:
 `KMOD_BLOCKED` | `lsm/kernel_read_file, lsm/kernel_load_data` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
 | `FILELESS_EXEC` | `lsm/bprm_check_security` | Detected structurally in-kernel via zero-link count (`i_nlink == 0`) on `tmpfs` (`memfd`) |
+| `IO_URING` | `tracepoint/io_uring/io_uring_submit_req` | Monitored asynchronous file ops (`IORING_OP_OPENAT`, `OPENAT2`, `CONNECT`) |
 
 ### Two operating modes
 
@@ -205,6 +206,10 @@ re-encode) before comparison, since the raw `dev_t` encoding used by
 `stat(2)` in userspace differs from the raw value the kernel exposes
 via `inode->i_sb->s_dev`. All three lists are hot-reloaded the same way
 as everything else, via `SIGHUP`/the 5-second poll.
+
+### Asynchronous Execution & Bypasses
+
+- **`IO_URING` Monitoring**: `io_uring` allows applications to bypass standard synchronous syscall entry points (like `openat` or `connect`) by submitting async Submission Queue Entries (SQE). K-Guard hooks `io_uring_submit_req` to inspect opcodes and extract file paths or socket targets submitted directly through ring buffers.
 
 ## Kubernetes context enrichment
  

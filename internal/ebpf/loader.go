@@ -12,7 +12,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -62,6 +62,7 @@ func NewManager() (*Manager, error) {
 		{"syscalls", "sys_enter_setuid", "tp_setuid", m.Objects.TpSetuid},
 		{"syscalls", "sys_enter_init_module", "tp_init_module", m.Objects.TpInitModule},
 		{"syscalls", "sys_enter_memfd_create", "tp_memfd_create", m.Objects.TpMemfdCreate},
+		{"io_uring", "io_uring_submit_req", "tp_iouring_req", m.Objects.TpIoUringSubmitReq},
 	}
 
 	for _, tp := range tracepoints {

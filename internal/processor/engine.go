@@ -367,6 +367,26 @@ func (e *Engine) AnalyzeKmodBlocked(comm string, pid, ppid, uid, gid uint32, cgr
 	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
+func (e *Engine) AnalyzeIoUring(pid, ppid, uid, gid uint32, comm, filename string, cgroupID uint64, opcode uint8, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow("iouring|" + strconv.Itoa(int(pid)) + "|" + strconv.Itoa(int(opcode))) {
+		return
+	}
+
+	detail := fmt.Sprintf("io_uring evasion attempt detected (opcode=%d)", opcode)
+	sev := config.SeverityMedium
+	if ancestorSuspicious {
+		sev = config.SeverityCritical
+	}
+
+	a := alert.Alert{
+		Severity: string(sev), Action: string(config.ActionAlert),
+		EventType: "IO_URING", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
+		Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
 // enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
 // at the next refactor this function will do the work of enriching all alerts not only the k8s context
 func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {

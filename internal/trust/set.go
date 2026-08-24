@@ -68,8 +68,6 @@ func (s *Set) Sync(paths []string, label string) []FileID {
 			continue
 		}
 		s.pinned[p] = &pinnedFile{f: f, id: id}
-		log.Printf("[trust] %s: pinned %q -> dev=%d ino=%d (major:minor=%d:%d)",
-			label, p, id.Dev, id.Ino, unix.Major(id.Dev), unix.Minor(id.Dev))
 	}
 
 	for p, pf := range s.pinned {

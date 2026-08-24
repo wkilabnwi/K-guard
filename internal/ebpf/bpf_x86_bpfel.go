@@ -56,6 +56,13 @@ type BPFFileId struct {
 	Ino uint64
 }
 
+type BPFIouringEvent struct {
+	Hdr      BPFEventHdr
+	Opcode   uint8
+	Filename [256]int8
+	_        [7]byte
+}
+
 type BPFKmodEvent struct {
 	Hdr      BPFEventHdr
 	LoadType uint32
@@ -140,6 +147,7 @@ type BPFProgramSpecs struct {
 	TpConnect            *ebpf.ProgramSpec `ebpf:"tp_connect"`
 	TpExecve             *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.ProgramSpec `ebpf:"tp_init_module"`
+	TpIoUringSubmitReq   *ebpf.ProgramSpec `ebpf:"tp_io_uring_submit_req"`
 	TpMemfdCreate        *ebpf.ProgramSpec `ebpf:"tp_memfd_create"`
 	TpOpenat             *ebpf.ProgramSpec `ebpf:"tp_openat"`
 	TpOpenat2            *ebpf.ProgramSpec `ebpf:"tp_openat2"`
@@ -232,6 +240,7 @@ type BPFPrograms struct {
 	TpConnect            *ebpf.Program `ebpf:"tp_connect"`
 	TpExecve             *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.Program `ebpf:"tp_init_module"`
+	TpIoUringSubmitReq   *ebpf.Program `ebpf:"tp_io_uring_submit_req"`
 	TpMemfdCreate        *ebpf.Program `ebpf:"tp_memfd_create"`
 	TpOpenat             *ebpf.Program `ebpf:"tp_openat"`
 	TpOpenat2            *ebpf.Program `ebpf:"tp_openat2"`
@@ -251,6 +260,7 @@ func (p *BPFPrograms) Close() error {
 		p.TpConnect,
 		p.TpExecve,
 		p.TpInitModule,
+		p.TpIoUringSubmitReq,
 		p.TpMemfdCreate,
 		p.TpOpenat,
 		p.TpOpenat2,

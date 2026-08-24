@@ -225,6 +225,15 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			ancestorSuspicious,
 			ancestorFilename,
 		)
+	case kebpf.EventIoUring:
+		var evt kebpf.BPFIouringEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		filename := int8ToString(evt.Filename[:])
+		r.engine.AnalyzeIoUring(hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, filename, hdr.CgroupId, evt.Opcode, ancestorSuspicious, ancestorFilename)
 
 	}
 
