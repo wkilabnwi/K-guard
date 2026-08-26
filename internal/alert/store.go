@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,14 +64,18 @@ func (s *Store) Send(a Alert) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.rotateIfNeeded(); err != nil {
+		log.Printf("[store] rotate error: %v", err)
 		return
 	}
 	line, err := json.Marshal(a)
 	if err != nil {
+		log.Printf("[store] marshal error: %v", err)
 		return
 	}
 	line = append(line, '\n')
-	_, _ = s.f.Write(line)
+	if _, err := s.f.Write(line); err != nil {
+		log.Printf("[store] write error: %v", err)
+	}
 }
 
 func (s *Store) Close() error {

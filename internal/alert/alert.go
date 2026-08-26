@@ -4,6 +4,7 @@
 package alert
 
 import (
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -159,9 +160,19 @@ func (d *Dispatcher) Dispatch(a Alert) {
 // Close drains and stops all sink workers
 func (d *Dispatcher) Close() {
 	d.mu.Lock()
+	workers := make([]*sinkWorker, len(d.workers))
+	copy(workers, d.workers)
 	for _, w := range d.workers {
 		close(w.queue)
 	}
 	d.mu.Unlock()
 	d.wg.Wait()
+
+	for _, w := range workers {
+		if c, ok := w.sink.(io.Closer); ok {
+			if err := c.Close(); err != nil {
+				log.Printf("[alert] sink %s close error: %v", w.sink.Name(), err)
+			}
+		}
+	}
 }

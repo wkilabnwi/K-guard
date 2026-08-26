@@ -12,7 +12,7 @@ import (
 
 var (
 	// systemd/cgroupfs pod UID patterns
-	podRegex = regexp.MustCompile(`pod([0-9a-fA-F_\-]{32,36})`)
+	podRegex = regexp.MustCompile(`\bpod([0-9a-fA-F_\-]{32,36})`)
 
 	// systemd scope container naming conv
 	containerScopeRegex = regexp.MustCompile(`(cri-containerd|crio|docker|libpod)-([0-9a-fA-F]{64})\.scope`)
@@ -133,10 +133,6 @@ func ParseCgroupPath(cgroupPath string) (ContainerContext, bool) {
 		case strings.Contains(cgroupPath, "crio"):
 			ctx.Runtime = "cri-o"
 		case strings.Contains(cgroupPath, "containerd"):
-			ctx.Runtime = "containerd"
-		case
-			strings.Contains(cgroupPath, "kubepods"),
-			strings.Contains(cgroupPath, "k8s"):
 			ctx.Runtime = "containerd"
 		default:
 			ctx.Runtime = "unknown"

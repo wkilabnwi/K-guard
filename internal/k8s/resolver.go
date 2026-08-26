@@ -98,12 +98,16 @@ func (r *Resolver) startKubeletSync(interval time.Duration) {
 	}
 }
 
+func needsEnrichment(ctx ContainerContext) bool {
+	return ctx.PodName == "" || ctx.Namespace == "" || ctx.Runtime == "" || ctx.Runtime == "unknown"
+}
+
 // Resolve fetches k8s container metadata
 func (r *Resolver) Resolve(cgroupID uint64, pid uint32) (ContainerContext, bool) {
 	// Check CGroupID LRU Cache
 	if cgroupID != 0 {
 		if ctx, ok := r.cgroupCache.Get(cgroupID); ok {
-			if ctx.PodName == "" || ctx.Namespace == "" {
+			if needsEnrichment(ctx) {
 				ctx = r.enrichContext(ctx)
 				if ctx.PodName != "" && ctx.Namespace != "" {
 					r.cgroupCache.Add(cgroupID, ctx)
