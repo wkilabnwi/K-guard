@@ -148,8 +148,9 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 
 	if isFileless {
 		filelessDetail := fmt.Sprintf("Fileless execution detected")
-		e.metrics.IncRuleHit("FilelessExecution")
 		sev := config.SeverityCritical
+
+		e.metrics.IncRuleHit("FilelessExecution", string(sev), string(config.ActionKill))
 
 		a := alert.Alert{
 			Severity: string(sev), Action: string(config.ActionKill),
@@ -198,13 +199,13 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			// if the same (Rule,pid) were already alerted within the dedup window, we pass on alerting for this one
 			continue
 		}
-		e.metrics.IncRuleHit(r.Name)
 
 		sev := r.Severity
 		detail := ""
 		if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
 			sev = config.SeverityMedium
 		}
+		e.metrics.IncRuleHit(r.Name, string(sev), string(r.Action))
 		if pathTruncated {
 			detail = "path truncated during read, match against configured path lists may be unreliable"
 		}

@@ -8,13 +8,19 @@ import (
 	"sync/atomic"
 )
 
+type RuleHitKey struct {
+	Rule     string
+	Severity string
+	Action   string
+}
+
 // Registry holds every counter K-Guard tracks. All operations are
 // atomic on the hot path except for the label maps, which
 // take a mutex only on first-seen-label creation.
 type Registry struct {
 	eventsTotal          map[string]*int64
 	eventsMu             sync.Mutex
-	ruleHitsTotal        map[string]*int64
+	ruleHitsTotal        map[RuleHitKey]*int64
 	ruleHitsMu           sync.Mutex
 	killsTotal           int64
 	killErrorsTotal      int64
@@ -30,7 +36,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		eventsTotal:     map[string]*int64{},
-		ruleHitsTotal:   map[string]*int64{},
+		ruleHitsTotal:   map[RuleHitKey]*int64{},
 		sinkErrorsTotal: map[string]*int64{},
 		sinkDropsTotal:  map[string]*int64{},
 	}
@@ -48,15 +54,30 @@ func bump(m map[string]*int64, mu *sync.Mutex, key string) {
 	atomic.AddInt64(p, 1)
 }
 
-func (r *Registry) IncHashCheckError()         { atomic.AddInt64(&r.hashCheckErrorsTotal, 1) }
-func (r *Registry) IncEvent(eventType string)  { bump(r.eventsTotal, &r.eventsMu, eventType) }
-func (r *Registry) IncRuleHit(ruleName string) { bump(r.ruleHitsTotal, &r.ruleHitsMu, ruleName) }
-func (r *Registry) IncKill()                   { atomic.AddInt64(&r.killsTotal, 1) }
-func (r *Registry) IncKillError()              { atomic.AddInt64(&r.killErrorsTotal, 1) }
-func (r *Registry) IncBlock()                  { atomic.AddInt64(&r.blocksTotal, 1) }
-func (r *Registry) IncRingbufDrop()            { atomic.AddInt64(&r.ringbufDropsTotal, 1) }
-func (r *Registry) IncSinkError(sink string)   { bump(r.sinkErrorsTotal, &r.sinkErrorsMu, sink) }
-func (r *Registry) IncSinkDrop(sink string)    { bump(r.sinkDropsTotal, &r.sinkDropsMu, sink) }
+func (r *Registry) IncHashCheckError()        { atomic.AddInt64(&r.hashCheckErrorsTotal, 1) }
+func (r *Registry) IncEvent(eventType string) { bump(r.eventsTotal, &r.eventsMu, eventType) }
+func (r *Registry) IncRuleHit(ruleName, severity, action string) {
+	key := RuleHitKey{
+		Rule:     ruleName,
+		Severity: severity,
+		Action:   action,
+	}
+	r.ruleHitsMu.Lock()
+	p, ok := r.ruleHitsTotal[key]
+	if !ok {
+		var v int64
+		p = &v
+		r.ruleHitsTotal[key] = p
+	}
+	r.ruleHitsMu.Unlock()
+	atomic.AddInt64(p, 1)
+}
+func (r *Registry) IncKill()                 { atomic.AddInt64(&r.killsTotal, 1) }
+func (r *Registry) IncKillError()            { atomic.AddInt64(&r.killErrorsTotal, 1) }
+func (r *Registry) IncBlock()                { atomic.AddInt64(&r.blocksTotal, 1) }
+func (r *Registry) IncRingbufDrop()          { atomic.AddInt64(&r.ringbufDropsTotal, 1) }
+func (r *Registry) IncSinkError(sink string) { bump(r.sinkErrorsTotal, &r.sinkErrorsMu, sink) }
+func (r *Registry) IncSinkDrop(sink string)  { bump(r.sinkDropsTotal, &r.sinkDropsMu, sink) }
 
 // Handler returns an http.Handler serving Prometheus text exposition
 // format at whatever path it's mounted on
@@ -68,9 +89,9 @@ func (r *Registry) Handler() http.Handler {
 		fmt.Fprintln(w, "# TYPE kguard_events_total counter")
 		writeLabeled(w, "kguard_events_total", "event_type", r.eventsTotal, &r.eventsMu)
 
-		fmt.Fprintln(w, "# HELP kguard_rule_hits_total Total rule matches, by rule name.")
+		fmt.Fprintln(w, "# HELP kguard_rule_hits_total Total rule matches, by rule name, severity, and action.")
 		fmt.Fprintln(w, "# TYPE kguard_rule_hits_total counter")
-		writeLabeled(w, "kguard_rule_hits_total", "rule", r.ruleHitsTotal, &r.ruleHitsMu)
+		r.writeRuleHits(w)
 
 		fmt.Fprintln(w, "# HELP kguard_kills_total Total SIGKILLs issued in response to a KILL-action rule.")
 		fmt.Fprintln(w, "# TYPE kguard_kills_total counter")
@@ -113,5 +134,33 @@ func writeLabeled(w http.ResponseWriter, metric, label string, m map[string]*int
 
 	for i, k := range keys {
 		fmt.Fprintf(w, "%s{%s=%q} %d\n", metric, label, k, vals[i])
+	}
+}
+
+func (r *Registry) writeRuleHits(w http.ResponseWriter) {
+	r.ruleHitsMu.Lock()
+	type item struct {
+		key RuleHitKey
+		val int64
+	}
+	items := make([]item, 0, len(r.ruleHitsTotal))
+	for k, v := range r.ruleHitsTotal {
+		items = append(items, item{key: k, val: atomic.LoadInt64(v)})
+	}
+	r.ruleHitsMu.Unlock()
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].key.Rule != items[j].key.Rule {
+			return items[i].key.Rule < items[j].key.Rule
+		}
+		if items[i].key.Severity != items[j].key.Severity {
+			return items[i].key.Severity < items[j].key.Severity
+		}
+		return items[i].key.Action < items[j].key.Action
+	})
+
+	for _, it := range items {
+		fmt.Fprintf(w, "kguard_rule_hits_total{rule=%q,severity=%q,action=%q} %d\n",
+			it.key.Rule, it.key.Severity, it.key.Action, it.val)
 	}
 }
