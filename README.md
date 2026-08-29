@@ -329,6 +329,14 @@ for graceful shutdown (all sinks are drained before exit).
 
 See `BUILD.md` for how to build the eBPF objects and the Go binary.
 
+## Testing
+
+Run the full unit test :
+
+```bash
+go test -v ./...
+```
+
 ## License
 
 MIT
