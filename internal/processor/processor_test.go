@@ -169,7 +169,7 @@ func TestEngine_AnalyzeExec(t *testing.T) {
 		t.Fatalf("expected 0 alerts for allowlisted executable, got %d", len(sink.Alerts()))
 	}
 
-	// Rule Match - Alert action
+	// Rule Match Alert action
 	eng.AnalyzeExec("nc", "/usr/bin/nc", 501, 1, 1000, 1000, 1, "-e /bin/sh", false, false, "", false, false)
 	alerts := waitForAlerts(sink, 1)
 	if len(alerts) != 1 {
