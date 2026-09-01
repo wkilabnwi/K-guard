@@ -331,11 +331,25 @@ See `BUILD.md` for how to build the eBPF objects and the Go binary.
 
 ## Testing
 
-Run the full unit test :
+K-Guard uses a split testing strategy: pure Go unit tests run anywhere in non-privileged mode, while eBPF kernel integration tests run conditionally when executed as root on Linux.
+
+### Run Unit Tests (Non-Privileged / Cross-Platform)
+
+Tests parser logic, path normalization, map byte alignment, string representation, and BPF spec loading:
 
 ```bash
 go test -v ./...
 ```
+
+### Run Kernel Integration Tests (Linux + Root Required)
+
+To execute full eBPF map interactions and program loader attachment tests, run as root:
+
+```bash
+sudo go test -v ./internal/ebpf/...
+```
+
+- Integration tests automatically skip on non-Linux platforms or non-root runners.
 
 ## License
 
