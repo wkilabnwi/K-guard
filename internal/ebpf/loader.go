@@ -12,7 +12,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -155,6 +155,36 @@ func NewManager() (*Manager, error) {
 		}
 	} else {
 		log.Println("[ebpf] WARNING: KguardKernelLoadData object is nil in compiled BPF objects!")
+	}
+
+	if m.Objects.LsmTaskKill != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmTaskKill})
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM task_kill hook failed to attach: %v", aerr)
+		} else {
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM task_kill self-defense hook attached.")
+		}
+	}
+
+	if m.Objects.LsmBpfCmd != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmBpfCmd})
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM bpf_cmd hook failed to attach: %v", aerr)
+		} else {
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM bpf_cmd self-defense hook attached.")
+		}
+	}
+
+	if m.Objects.SelfPid != nil {
+		key := uint32(0)
+		pid := uint32(os.Getpid())
+		if err := m.Objects.SelfPid.Update(&key, &pid, ebpf.UpdateAny); err != nil {
+			log.Printf("[ebpf] WARNING: could not set self-protection PID: %v", err)
+		} else {
+			log.Printf("[ebpf] Self-protection registered for PID %d", pid)
+		}
 	}
 
 	if !m.LSMEnabled {

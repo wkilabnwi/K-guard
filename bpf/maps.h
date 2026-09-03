@@ -103,4 +103,11 @@ struct {
     __type(key, __u64);  
     __type(value, __u8);  
 } container_cgroups SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} self_pid SEC(".maps");
 #endif

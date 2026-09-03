@@ -8,6 +8,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -16,21 +17,21 @@ import (
 	"time"
 )
 
-func checkConfigPermissions(path string) error {
-	fi, err := os.Stat(path)
+func checkConfigPermissionsFD(f *os.File) error {
+	fi, err := f.Stat()
 	if err != nil {
-		return fmt.Errorf("stat %s: %w", path, err)
+		return fmt.Errorf("fstat %s: %w", f.Name(), err)
 	}
 
 	mode := fi.Mode()
 	if mode&0022 != 0 {
 		return fmt.Errorf("refusing to load %s: writable by group and/or other (mode %04o), "+
-			"run e.g. chmod 600 %s", path, mode.Perm(), path)
+			"run e.g. chmod 600 %s", f.Name(), mode.Perm(), f.Name())
 	}
 
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		if uid := os.Getuid(); uid != 0 && int(st.Uid) != uid {
-			return fmt.Errorf("refusing to load %s: owned by uid %d, not the uid K-Guard is running as (%d)", path, st.Uid, uid)
+			return fmt.Errorf("refusing to load %s: owned by uid %d, not the uid K-Guard is running as (%d)", f.Name(), st.Uid, uid)
 		}
 	}
 
@@ -39,14 +40,21 @@ func checkConfigPermissions(path string) error {
 
 // Load reads, parses, defaults, and validates a config file in one shot
 func Load(path string) (*Config, error) {
-	if err := checkConfigPermissions(path); err != nil {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening config %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if err := checkConfigPermissionsFD(f); err != nil {
 		return nil, err
 	}
 
-	b, err := os.ReadFile(path)
+	b, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
+
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)

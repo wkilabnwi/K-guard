@@ -141,9 +141,11 @@ type BPFSpecs struct {
 type BPFProgramSpecs struct {
 	KguardKernelLoadData *ebpf.ProgramSpec `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.ProgramSpec `ebpf:"kguard_kernel_read_file"`
+	LsmBpfCmd            *ebpf.ProgramSpec `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
 	LsmFileOpen          *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
 	LsmPtraceAccessCheck *ebpf.ProgramSpec `ebpf:"lsm_ptrace_access_check"`
+	LsmTaskKill          *ebpf.ProgramSpec `ebpf:"lsm_task_kill"`
 	TpConnect            *ebpf.ProgramSpec `ebpf:"tp_connect"`
 	TpExecve             *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.ProgramSpec `ebpf:"tp_init_module"`
@@ -172,6 +174,7 @@ type BPFMapSpecs struct {
 	PtraceEnforcementEnabled *ebpf.MapSpec `ebpf:"ptrace_enforcement_enabled"`
 	Rb                       *ebpf.MapSpec `ebpf:"rb"`
 	ScratchMap               *ebpf.MapSpec `ebpf:"scratch_map"`
+	SelfPid                  *ebpf.MapSpec `ebpf:"self_pid"`
 	SensitiveWritePaths      *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
 	SuspiciousPaths          *ebpf.MapSpec `ebpf:"suspicious_paths"`
 }
@@ -206,6 +209,7 @@ type BPFMaps struct {
 	PtraceEnforcementEnabled *ebpf.Map `ebpf:"ptrace_enforcement_enabled"`
 	Rb                       *ebpf.Map `ebpf:"rb"`
 	ScratchMap               *ebpf.Map `ebpf:"scratch_map"`
+	SelfPid                  *ebpf.Map `ebpf:"self_pid"`
 	SensitiveWritePaths      *ebpf.Map `ebpf:"sensitive_write_paths"`
 	SuspiciousPaths          *ebpf.Map `ebpf:"suspicious_paths"`
 }
@@ -223,6 +227,7 @@ func (m *BPFMaps) Close() error {
 		m.PtraceEnforcementEnabled,
 		m.Rb,
 		m.ScratchMap,
+		m.SelfPid,
 		m.SensitiveWritePaths,
 		m.SuspiciousPaths,
 	)
@@ -234,9 +239,11 @@ func (m *BPFMaps) Close() error {
 type BPFPrograms struct {
 	KguardKernelLoadData *ebpf.Program `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.Program `ebpf:"kguard_kernel_read_file"`
+	LsmBpfCmd            *ebpf.Program `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.Program `ebpf:"lsm_bprm_check"`
 	LsmFileOpen          *ebpf.Program `ebpf:"lsm_file_open"`
 	LsmPtraceAccessCheck *ebpf.Program `ebpf:"lsm_ptrace_access_check"`
+	LsmTaskKill          *ebpf.Program `ebpf:"lsm_task_kill"`
 	TpConnect            *ebpf.Program `ebpf:"tp_connect"`
 	TpExecve             *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.Program `ebpf:"tp_init_module"`
@@ -254,9 +261,11 @@ func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.KguardKernelLoadData,
 		p.KguardKernelReadFile,
+		p.LsmBpfCmd,
 		p.LsmBprmCheck,
 		p.LsmFileOpen,
 		p.LsmPtraceAccessCheck,
+		p.LsmTaskKill,
 		p.TpConnect,
 		p.TpExecve,
 		p.TpInitModule,

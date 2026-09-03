@@ -33,6 +33,8 @@ it, a BPF LSM hook:
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
 | `FILELESS_EXEC` | `lsm/bprm_check_security` | Detected structurally in-kernel via zero-link count (`i_nlink == 0`) on `tmpfs` (`memfd`) |
 | `IO_URING` | `tracepoint/io_uring/io_uring_submit_req` | Monitored asynchronous file ops (`IORING_OP_OPENAT`, `OPENAT2`, `CONNECT`) |
+| `TASK_KILL_BLOCKED` | `lsm/task_kill` | Self-protection: pre-emptively blocks external processes from sending termination signals to K-Guard |
+| `BPF_CMD_BLOCKED` | `lsm/bpf` | Self-protection: blocks unauthorized processes from inspecting or detaching K-Guard eBPF maps/programs |
 
 ### Two operating modes
 
@@ -45,6 +47,9 @@ it, a BPF LSM hook:
   - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
   - **Ptrace Prevention**: When `ptrace_enforcement_enabled`: true and LSM hooks are active, `lsm/ptrace_access_check` blocks unauthorized injection attempts unless the caller matches the `allowed_ptrace_attaches` whitelist.
   - **Kernel Module Load Prevention**: Intercepts `init_module` calls and blocks them at the kernel boundary when originating from tracked container cgroups registered in the `container_cgroups` BPF map.
+  - **Agent Self-Protection**:
+    - `lsm/task_kill` intercepts termination signals targeted at K-Guard's PID and rejects them (`-EPERM`) unless sent by K-Guard itself or PID 1.
+    - `lsm/bpf` restricts critical eBPF system calls (`BPF_LINK_DETACH`, `BPF_MAP_GET_FD_BY_ID`, `BPF_PROG_GET_FD_BY_ID`, etc.) to prevent hostile processes from detaching or inspecting K-Guard's in-kernel security filters.
 
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading
@@ -303,12 +308,9 @@ tokens, or source them from a file `sudo` can read as root.
 
 ## Safety guarantees
 
-K-Guard will never `SIGKILL`:
-- PID 1
-- its own PID
-- any PID listed in `protected_pids`, or any process whose live,
-  re-resolved `/proc/<pid>/exe` identity matches a path in
-  `protected_comms`
+K-Guard guarantees both self-preservation and protection against accidental collateral damage:
+- **In-Kernel Self-Defense**: Active LSM hooks (`lsm/task_kill` and `lsm/bpf`) prevent non-PID 1 external processes from sending termination signals or detaching/modifying K-Guard's eBPF map descriptors and links.
+- **Process Safe-List**: K-Guard will never `SIGKILL` PID 1, its own PID, any PID listed in `protected_pids`, or any process whose live `/proc/<pid>/exe` identity matches `protected_comms`.
 
 Kills go through `pidfd_open` + `pidfd_send_signal` rather than a raw
 `kill()` by PID, so a PID that has already exited and been recycled by
