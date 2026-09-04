@@ -306,6 +306,11 @@ When testing manually using `sudo`, remember `sudo` resets the
 environment by default so use `sudo -E` to keep your exported
 tokens, or source them from a file `sudo` can read as root.
 
+A `/healthz` endpoint (unauthenticated, no bearer token needed) is served
+alongside `/metrics` for liveness probes, reports uptime, active sensors,
+LSM status, build revision, and seconds since the last event was read from
+the ring buffer.
+
 ## Safety guarantees
 
 K-Guard guarantees both self-preservation and protection against accidental collateral damage:
@@ -324,6 +329,12 @@ the kernel for an unrelated process can't be killed by mistake.
 
 ```
 sudo ./k-guard -config /config/rules.json
+
+Validate a config without touching the kernel:
+sudo ./k-guard -config /config/rules.json -check
+
+Print build/version info:
+./k-guard -version
 ```
 
 Send `SIGHUP` to force an immediate config reload; `SIGINT`/`SIGTERM`

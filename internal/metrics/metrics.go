@@ -31,6 +31,7 @@ type Registry struct {
 	hashCheckErrorsTotal int64
 	sinkDropsTotal       map[string]*int64
 	sinkDropsMu          sync.Mutex
+	buildInfo            string
 }
 
 func NewRegistry() *Registry {
@@ -79,6 +80,8 @@ func (r *Registry) IncRingbufDrop()          { atomic.AddInt64(&r.ringbufDropsTo
 func (r *Registry) IncSinkError(sink string) { bump(r.sinkErrorsTotal, &r.sinkErrorsMu, sink) }
 func (r *Registry) IncSinkDrop(sink string)  { bump(r.sinkDropsTotal, &r.sinkDropsMu, sink) }
 
+func (r *Registry) SetBuildInfo(info string) { r.buildInfo = info }
+
 // Handler returns an http.Handler serving Prometheus text exposition
 // format at whatever path it's mounted on
 func (r *Registry) Handler() http.Handler {
@@ -113,9 +116,17 @@ func (r *Registry) Handler() http.Handler {
 		fmt.Fprintln(w, "# TYPE kguard_sink_errors_total counter")
 		writeLabeled(w, "kguard_sink_errors_total", "sink", r.sinkErrorsTotal, &r.sinkErrorsMu)
 
+		fmt.Fprintln(w, "# HELP kguard_sink_drops_total Total alerts dropped because a sink's queue was full.")
+		fmt.Fprintln(w, "# TYPE kguard_sink_drops_total counter")
+		writeLabeled(w, "kguard_sink_drops_total", "sink", r.sinkDropsTotal, &r.sinkDropsMu)
+
 		fmt.Fprintln(w, "# HELP kguard_hash_check_errors_total Total SHA256 rule checks that could not be completed (e.g. process exited before the binary could be read).")
 		fmt.Fprintln(w, "# TYPE kguard_hash_check_errors_total counter")
 		fmt.Fprintf(w, "kguard_hash_check_errors_total %d\n", atomic.LoadInt64(&r.hashCheckErrorsTotal))
+
+		fmt.Fprintln(w, "# HELP kguard_build_info Always 1, build metadata is in the labels.")
+		fmt.Fprintln(w, "# TYPE kguard_build_info gauge")
+		fmt.Fprintf(w, "kguard_build_info{revision=%q} 1\n", r.buildInfo)
 	})
 }
 

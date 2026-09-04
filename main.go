@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,8 +33,72 @@ import (
 // of importing internal/ebpf directly.
 type statusAdapter struct{ mgr *kebpf.Manager }
 
+type healthState struct {
+	mu          sync.RWMutex
+	lastEventAt time.Time
+	lsmEnabled  bool
+	sensors     []string
+	started     time.Time
+}
+
 func (s statusAdapter) ActiveSensors() []string { return s.mgr.ActiveSensors() }
 func (s statusAdapter) LSMEnabled() bool        { return s.mgr.LSMEnabled }
+
+func buildInfo() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown (not built as a module)"
+	}
+	var commit, dirty, buildTime string
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			commit = s.Value
+		case "vcs.modified":
+			if s.Value == "true" {
+				dirty = "-dirty"
+			}
+		case "vcs.time":
+			buildTime = s.Value
+		}
+	}
+	if commit == "" {
+		return fmt.Sprintf("unknown revision (go %s)", bi.GoVersion)
+	}
+	short := commit
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	return fmt.Sprintf("%s%s (built %s, go %s)", short, dirty, buildTime, bi.GoVersion)
+}
+
+func (h *healthState) Handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+		resp := map[string]interface{}{
+			"status":         "ok",
+			"build":          buildInfo(),
+			"uptime_seconds": int(time.Since(h.started).Seconds()),
+			"lsm_enabled":    h.lsmEnabled,
+			"active_sensors": h.sensors,
+			"last_event_ago_seconds": func() interface{} {
+				if h.lastEventAt.IsZero() {
+					return nil
+				}
+				return int(time.Since(h.lastEventAt).Seconds())
+			}(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func (h *healthState) touch() {
+	h.mu.Lock()
+	h.lastEventAt = time.Now()
+	h.mu.Unlock()
+}
 
 func resolveToken(envVar, cfgVal string) string {
 	if v := os.Getenv(envVar); v != "" {
@@ -42,7 +109,25 @@ func resolveToken(envVar, cfgVal string) string {
 
 func main() {
 	configPath := flag.String("config", "configs/rules.json", "path to the JSON rule/policy config file")
+	checkOnly := flag.Bool("check", false, "validate the config file and exit (0 = valid, 1 = invalid), no eBPF/kernel interaction")
+	showVersion := flag.Bool("version", false, "print version info and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("k-guard %s\n", buildInfo())
+		os.Exit(0)
+	}
+
+	if *checkOnly {
+		c, err := config.Load(*configPath)
+		if err != nil {
+			log.Printf("INVALID: %v", err)
+			os.Exit(1)
+		}
+		log.Printf("OK: %s is valid (%d rules, %d allowlist entries, enforcement=%v)",
+			*configPath, len(c.Rules), len(c.Allowlist), c.EnforcementEnabled)
+		os.Exit(0)
+	}
 
 	log.Println("Initializing K-Guard...")
 
@@ -60,9 +145,12 @@ func main() {
 	}
 	defer mgr.Close()
 
+	health := &healthState{started: time.Now(), lsmEnabled: mgr.LSMEnabled, sensors: mgr.ActiveSensors()}
+
 	guard := safety.NewGuard()
 
 	metricsRegistry := metrics.NewRegistry()
+	metricsRegistry.SetBuildInfo(buildInfo())
 	dispatcher := alert.NewDispatcher()
 	// We set a callback function if a sink Drops a Send
 	dispatcher.OnDrop(metricsRegistry.IncSinkDrop)
@@ -116,9 +204,13 @@ func main() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", metricsRegistry.Handler())
 
+		topMux := http.NewServeMux()
+		topMux.HandleFunc("/healthz", health.Handler())
+		topMux.Handle("/", httpauth.RequireBearer(metricsToken, mux))
+
 		metricsSrv = &http.Server{
 			Addr:              cfg.Sinks.MetricsListenAddr,
-			Handler:           httpauth.RequireBearer(metricsToken, mux),
+			Handler:           topMux,
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       10 * time.Second,
 			WriteTimeout:      10 * time.Second,
@@ -190,6 +282,7 @@ func main() {
 					log.Printf("Error reading ringbuf: %v", err)
 					continue
 				}
+				health.touch()
 				router.ProcessRawRecord(record.RawSample)
 			}
 		}
