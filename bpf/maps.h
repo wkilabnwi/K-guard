@@ -19,16 +19,6 @@ struct {
     __type(value, __u8);
 } blocked_paths SEC(".maps");
 
-// userspace sets this to 1 to disable all LSM enforcement
-// instantly (example if it's misbehaving or false-positiving in production)
-// without needing to detach/reload programs, Detect-only mode still runs. 
-struct {
-    __uint(type, 2); // BPF_MAP_TYPE_ARRAY 
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u8);
-} enforcement_enabled SEC(".maps");
-
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
@@ -73,15 +63,6 @@ struct {
     __type(value, __u8);
 } blocked_write_paths SEC(".maps");
 
-
-// Dedicated ptrace enforcement switch
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u8);
-} ptrace_enforcement_enabled SEC(".maps");
-
 // Allowed callers for full control/attach (PTRACE_MODE_ATTACH)
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -91,23 +72,17 @@ struct {
 } allowed_ptrace_attaches SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u8);
-} kmod_enforcement_enabled SEC(".maps");
-
-struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 4096);
     __type(key, __u64);  
     __type(value, __u8);  
 } container_cgroups SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u32);
-} self_pid SEC(".maps");
+
+
+volatile __u8 enforcement_enabled SEC(".bss");
+volatile __u8 kmod_enforcement_enabled SEC(".bss");
+volatile __u8 ptrace_enforcement_enabled SEC(".bss");
+volatile __u32 self_pid SEC(".bss");
+
 #endif

@@ -18,6 +18,7 @@
 #define EVENT_PTRACE_BLOCKED 11 // saved for blocked ptrace events
 #define EVENT_KMOD_BLOCKED 12 // saved for blocked Kernel module load events
 #define EVT_IO_URING 13
+#define EVENT_LPE_BLOCKED 14
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -94,6 +95,13 @@ struct iouring_event {
     char filename[PATH_BUF_SIZE];
 };
 
+struct lpe_event {
+    struct event_hdr hdr;
+    __u32 old_uid;
+    __u32 new_uid;
+};
+
+
 struct event_hdr *unused_event_hdr __attribute__((unused));
 struct exec_event *unused_exec_event __attribute__((unused));
 struct connect_event *unused_connect_event __attribute__((unused));
@@ -101,12 +109,16 @@ struct open_event *unused_open_event __attribute__((unused));
 struct ptrace_event *unused_ptrace_event __attribute__((unused));
 struct kmod_event *unused_kmod_event __attribute__((unused));
 struct iouring_event *unused_iouring_event __attribute__((unused));
+struct lpe_event *unused_lpe_event __attribute__((unused));
 
 
 // Process lineage state carried per PID
 struct process_lineage {
     __u32 parent_pid;
+    __u32 expected_uid;       
+    __u8  setuid_allowed;
     __u8  suspicious_ancestor;
+    __u8  _pad[2];
     char  ancestor_filename[PATH_BUF_SIZE];
 };
 
@@ -124,5 +136,6 @@ struct file_id {
     __u64 dev;
     __u64 ino;
 };
+
 
 #endif

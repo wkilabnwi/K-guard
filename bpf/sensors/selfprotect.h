@@ -8,12 +8,10 @@
 SEC("lsm/task_kill")
 int BPF_PROG(lsm_task_kill, struct task_struct *p, struct kernel_siginfo *info,
              int sig, const struct cred *cred) {
-    __u32 zero = 0;
-    __u32 *guard_pid = bpf_map_lookup_elem(&self_pid, &zero);
-    if (!guard_pid || *guard_pid == 0) return 0; //
+    if (self_pid == 0) return 0;
 
     __u32 target = BPF_CORE_READ(p, tgid);
-    if (target != *guard_pid) return 0;
+    if (target != self_pid) return 0;
 
     __u64 id = bpf_get_current_pid_tgid();
     __u32 caller = (__u32)(id >> 32);
@@ -35,13 +33,11 @@ int BPF_PROG(lsm_bpf_cmd, int cmd, union bpf_attr *attr, unsigned int size) {
         return 0;
     }
 
-    __u32 zero = 0;
-    __u32 *guard_pid = bpf_map_lookup_elem(&self_pid, &zero);
-    if (!guard_pid || *guard_pid == 0) return 0;
+    if (self_pid == 0) return 0;
 
     __u64 id = bpf_get_current_pid_tgid();
     __u32 caller = (__u32)(id >> 32);
-    if (caller == *guard_pid) return 0;
+    if (caller == self_pid) return 0;
 
     return -1;
 }

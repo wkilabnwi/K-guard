@@ -17,6 +17,7 @@ const (
 	EventPtraceBlocked  EventType = 11 // for blocked ptrace events
 	EventKmodBlocked    EventType = 12 // for blocked kmod events
 	EventIoUring        EventType = 13 // iouring events
+	EventLpeBlocked     EventType = 14
 )
 
 func (t EventType) String() string {
@@ -47,6 +48,8 @@ func (t EventType) String() string {
 		return "KMOD_BLOCKED"
 	case EventIoUring:
 		return "IOURING"
+	case EventLpeBlocked:
+		return "LPE_BLOCKED"
 	default:
 		return "UNKNOWN"
 	}

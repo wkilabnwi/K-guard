@@ -235,6 +235,25 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		filename := int8ToString(evt.Filename[:])
 		r.engine.AnalyzeIoUring(hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, filename, hdr.CgroupId, evt.Opcode, ancestorSuspicious, ancestorFilename)
 
+	case kebpf.EventLpeBlocked:
+		var evt kebpf.BPFLpeEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		r.engine.AnalyzeLpeBlocked(
+			comm,
+			hdr.Pid,
+			hdr.Ppid,
+			hdr.Uid,
+			hdr.Gid,
+			hdr.CgroupId,
+			evt.OldUid,
+			evt.NewUid,
+			ancestorSuspicious,
+			ancestorFilename,
+		)
 	}
 
 }

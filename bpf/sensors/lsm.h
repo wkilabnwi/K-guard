@@ -9,12 +9,29 @@
 #define PTRACE_MODE_READ 0x01
 #endif
 
+#ifndef S_ISUID
+#define S_ISUID 04000
+#endif
+
 #include "../types.h"
 #include "../maps.h"
 #include "../helpers.h"
 
 
 // HELPERS
+
+static __always_inline void emit_lpe_event(__u32 old_uid, __u32 new_uid) {
+    struct lpe_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return;
+    }
+
+    fill_common(&e->hdr, EVENT_LPE_BLOCKED);
+    e->old_uid = old_uid;
+    e->new_uid = new_uid;
+
+    bpf_ringbuf_submit(e, 0);
+}
 
 static __always_inline void emit_kmod_event(__u32 type, __u32 load_type) {
     struct kmod_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
@@ -45,25 +62,15 @@ static __always_inline int handle_kmod_check(int id) {
 
     __u64 cgroup_id = bpf_get_current_cgroup_id();
     __u8 *is_container = bpf_map_lookup_elem(&container_cgroups, &cgroup_id);
-
-    bpf_printk("kguard: cgroup check -> cgroup_id=%llu, found_in_map=%d\n", 
-               cgroup_id, is_container ? *is_container : 0);
     
     if (!is_container) {
         return 0; 
     }
 
-    __u32 zero = 0;
-    __u8 *enabled = bpf_map_lookup_elem(&kmod_enforcement_enabled, &zero);
-
-    bpf_printk("kguard: enforcement check -> map_ptr=%p, enabled_val=%d\n", 
-               enabled, enabled ? *enabled : 0);
-
-    if (!enabled || *enabled == 0) {
+    if (!kmod_enforcement_enabled) {
         return 0;
     }
 
-    bpf_printk("kguard: BLOCKING kernel module load for container cgroup=%llu!\n", cgroup_id);
 
     emit_kmod_event(EVENT_KMOD_BLOCKED, 2);
 
@@ -132,9 +139,8 @@ SEC("lsm/bprm_check_security")
 int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     __u32 zero = 0;
-    __u8 *enabled = bpf_map_lookup_elem(&enforcement_enabled, &zero);
 
-    if (!enabled || *enabled == 0) {
+    if (!enforcement_enabled) {
         return 0;
     }
 
@@ -161,14 +167,33 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
         return -1;
     }
 
+    struct file *file = BPF_CORE_READ(bprm, file);
+    if (file) {
+        struct inode *inode = BPF_CORE_READ(file, f_inode);
+        if (inode) {
+            umode_t i_mode = BPF_CORE_READ(inode, i_mode);
+            
+            __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+            struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &pid);
+            
+            if (lin) {
+                if (i_mode & S_ISUID) {
+                    lin->setuid_allowed = 1;
+                } else {
+                    lin->setuid_allowed = 0;
+                }
+                bpf_map_update_elem(&lineage_map, &pid, lin, BPF_EXIST);
+            }
+        }
+    }
+
     return 0;
 }
 
 SEC("lsm/ptrace_access_check")
 int BPF_PROG(lsm_ptrace_access_check, struct task_struct *child, unsigned int mode) {
     __u32 zero = 0;
-    __u8 *enabled = bpf_map_lookup_elem(&ptrace_enforcement_enabled, &zero);
-    if (!enabled || *enabled == 0) {
+    if (!ptrace_enforcement_enabled) {
         return 0;
     }
 
@@ -202,6 +227,32 @@ int BPF_PROG(kguard_kernel_read_file, struct file *file, enum kernel_read_file_i
 SEC("lsm/kernel_load_data")
 int BPF_PROG(kguard_kernel_load_data, enum kernel_load_data_id id, bool contents) {
     return handle_kmod_check((int)id);
+}
+
+SEC("lsm/task_fix_setuid")
+int BPF_PROG(kguard_task_fix_setuid, struct cred *new, const struct cred *old, int flags) {
+    if (!enforcement_enabled) return 0;
+
+    __u32 old_uid = old->uid.val;
+    __u32 new_uid = new->uid.val;
+
+    // Ignore transitions that don't change UIDs
+    if (old_uid == new_uid) return 0;
+
+    __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+    struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &pid);
+
+    if (lin) {
+        if (old_uid != 0 && new_uid == 0 && !lin->setuid_allowed) {
+            emit_lpe_event(old_uid, new_uid);
+            return -1;
+        }
+
+        lin->expected_uid = new_uid;
+        bpf_map_update_elem(&lineage_map, &pid, lin, BPF_EXIST);
+    }
+
+    return 0;
 }
 
 

@@ -388,6 +388,36 @@ func (e *Engine) AnalyzeIoUring(pid, ppid, uid, gid uint32, comm, filename strin
 	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
+func (e *Engine) AnalyzeLpeBlocked(comm string, pid, ppid, uid, gid uint32, cgroupID uint64, oldUID, newUID uint32, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow("lpe_blocked|" + strconv.Itoa(int(pid))) {
+		return
+	}
+	e.metrics.IncBlock()
+
+	detail := fmt.Sprintf("Unauthorized Local Privilege Escalation blocked by LSM policy (comm='%s', uid %d -> %d)", comm, oldUID, newUID)
+	if ancestorSuspicious {
+		detail += fmt.Sprintf(" [triggered via suspicious ancestor: %s]", ancestorFilename)
+	}
+
+	a := alert.Alert{
+		Severity:           string(config.SeverityCritical),
+		Action:             string(config.ActionAlert),
+		Blocked:            true,
+		EventType:          "LPE_BLOCKED",
+		Pid:                pid,
+		Ppid:               ppid,
+		Uid:                uid,
+		Gid:                gid,
+		Comm:               comm,
+		CgroupID:           cgroupID,
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		Detail:             detail,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
 // enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
 // at the next refactor this function will do the work of enriching all alerts not only the k8s context
 func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {

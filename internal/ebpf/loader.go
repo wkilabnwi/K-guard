@@ -12,7 +12,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -177,14 +177,21 @@ func NewManager() (*Manager, error) {
 		}
 	}
 
-	if m.Objects.SelfPid != nil {
-		key := uint32(0)
-		pid := uint32(os.Getpid())
-		if err := m.Objects.SelfPid.Update(&key, &pid, ebpf.UpdateAny); err != nil {
-			log.Printf("[ebpf] WARNING: could not set self-protection PID: %v", err)
+	// Attach LSM Task Fix Setuid Hook
+	if m.Objects.KguardTaskFixSetuid != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardTaskFixSetuid})
+		if aerr != nil {
+			log.Printf("[ebpf] WARNING: LSM task_fix_setuid hook failed to attach: %v", aerr)
 		} else {
-			log.Printf("[ebpf] Self-protection registered for PID %d", pid)
+			m.links = append(m.links, l)
+			log.Println("[ebpf] LSM task_fix_setuid hook attached, local privilege escalation blocking is ACTIVE.")
 		}
+	} else {
+		log.Println("[ebpf] WARNING: KguardTaskFixSetuid object is nil in compiled BPF objects!")
+	}
+
+	if err := m.Objects.SelfPid.Set(uint32(os.Getpid())); err != nil {
+		return nil, fmt.Errorf("setting self_pid: %w", err)
 	}
 
 	if !m.LSMEnabled {
@@ -214,38 +221,27 @@ func (m *Manager) ActiveSensors() []string {
 }
 
 func (m *Manager) SetEnforcement(enabled bool) error {
-	if m.Objects.EnforcementEnabled == nil {
-		return nil
-	}
-	//uint8 because C code only acccepts a byte, should've thought about it earlier
 	var v uint8
 	if enabled {
 		v = 1
 	}
-	return m.Objects.EnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
+	return m.Objects.EnforcementEnabled.Set(v)
 }
 
 func (m *Manager) SetPtraceEnforcement(enabled bool) error {
-	if m.Objects.PtraceEnforcementEnabled == nil {
-		return nil
-	}
-	//uint8 because C code only acccepts a byte, should've thought about it earlier
 	var v uint8
 	if enabled {
 		v = 1
 	}
-	return m.Objects.PtraceEnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
+	return m.Objects.PtraceEnforcementEnabled.Set(v)
 }
 
 func (m *Manager) SetKmodEnforcement(enabled bool) error {
-	if m.Objects.KmodEnforcementEnabled == nil {
-		return nil
-	}
 	var v uint8
 	if enabled {
 		v = 1
 	}
-	return m.Objects.KmodEnforcementEnabled.Update(uint32(0), v, ebpf.UpdateAny)
+	return m.Objects.KmodEnforcementEnabled.Set(v)
 }
 
 // This is the Sync Helper function, it syncs the paths with

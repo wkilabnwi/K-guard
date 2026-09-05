@@ -8,11 +8,13 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
 
 type BPFConnectEvent struct {
+	_        structs.HostLayout
 	Hdr      BPFEventHdr
 	Daddr    uint32
 	Daddr6   [16]uint8
@@ -23,6 +25,7 @@ type BPFConnectEvent struct {
 }
 
 type BPFEventHdr struct {
+	_                  structs.HostLayout
 	TimestampNs        uint64
 	Pid                uint32
 	Ppid               uint32
@@ -41,6 +44,7 @@ type BPFEventHdr struct {
 }
 
 type BPFExecEvent struct {
+	_             structs.HostLayout
 	Hdr           BPFEventHdr
 	Filename      [256]int8
 	Args          [256]int8
@@ -49,14 +53,19 @@ type BPFExecEvent struct {
 	_             [6]byte
 }
 
-type BPFExecScratch struct{ Args [256]int8 }
+type BPFExecScratch struct {
+	_    structs.HostLayout
+	Args [256]int8
+}
 
 type BPFFileId struct {
+	_   structs.HostLayout
 	Dev uint64
 	Ino uint64
 }
 
 type BPFIouringEvent struct {
+	_        structs.HostLayout
 	Hdr      BPFEventHdr
 	Opcode   uint8
 	Filename [256]int8
@@ -64,12 +73,21 @@ type BPFIouringEvent struct {
 }
 
 type BPFKmodEvent struct {
+	_        structs.HostLayout
 	Hdr      BPFEventHdr
 	LoadType uint32
 	_        [4]byte
 }
 
+type BPFLpeEvent struct {
+	_      structs.HostLayout
+	Hdr    BPFEventHdr
+	OldUid uint32
+	NewUid uint32
+}
+
 type BPFOpenEvent struct {
+	_             structs.HostLayout
 	Hdr           BPFEventHdr
 	Filename      [256]int8
 	IsFileless    uint8
@@ -78,13 +96,17 @@ type BPFOpenEvent struct {
 }
 
 type BPFProcessLineage struct {
+	_                  structs.HostLayout
 	ParentPid          uint32
+	ExpectedUid        uint32
+	SetuidAllowed      uint8
 	SuspiciousAncestor uint8
+	Pad                [2]uint8
 	AncestorFilename   [256]int8
-	_                  [3]byte
 }
 
 type BPFPtraceEvent struct {
+	_          structs.HostLayout
 	Hdr        BPFEventHdr
 	TargetPid  uint32
 	Mode       uint32
@@ -93,10 +115,58 @@ type BPFPtraceEvent struct {
 }
 
 type BPFScratchBuffer struct {
+	_       structs.HostLayout
 	Primary [256]int8
 	Walk    [256]int8
 	Lin     BPFProcessLineage
 }
+
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	BPFMapAllowedPtraceAttaches    = "allowed_ptrace_attaches"
+	BPFMapBlockedPaths             = "blocked_paths"
+	BPFMapBlockedWritePaths        = "blocked_write_paths"
+	BPFMapContainerCgroups         = "container_cgroups"
+	BPFMapExecScratchMap           = "exec_scratch_map"
+	BPFMapLineageMap               = "lineage_map"
+	BPFMapRb                       = "rb"
+	BPFMapScratchMap               = "scratch_map"
+	BPFMapSensitiveWritePaths      = "sensitive_write_paths"
+	BPFMapSuspiciousPaths          = "suspicious_paths"
+	BPFProgKguardKernelLoadData    = "kguard_kernel_load_data"
+	BPFProgKguardKernelReadFile    = "kguard_kernel_read_file"
+	BPFProgKguardTaskFixSetuid     = "kguard_task_fix_setuid"
+	BPFProgLsmBpfCmd               = "lsm_bpf_cmd"
+	BPFProgLsmBprmCheck            = "lsm_bprm_check"
+	BPFProgLsmFileOpen             = "lsm_file_open"
+	BPFProgLsmPtraceAccessCheck    = "lsm_ptrace_access_check"
+	BPFProgLsmTaskKill             = "lsm_task_kill"
+	BPFProgTpConnect               = "tp_connect"
+	BPFProgTpExecve                = "tp_execve"
+	BPFProgTpInitModule            = "tp_init_module"
+	BPFProgTpIoUringSubmitReq      = "tp_io_uring_submit_req"
+	BPFProgTpMemfdCreate           = "tp_memfd_create"
+	BPFProgTpOpenat                = "tp_openat"
+	BPFProgTpOpenat2               = "tp_openat2"
+	BPFProgTpPtrace                = "tp_ptrace"
+	BPFProgTpSchedexec             = "tp_schedexec"
+	BPFProgTpSchedfork             = "tp_schedfork"
+	BPFProgTpSetuid                = "tp_setuid"
+	BPFVarEnforcementEnabled       = "enforcement_enabled"
+	BPFVarKmodEnforcementEnabled   = "kmod_enforcement_enabled"
+	BPFVarPtraceEnforcementEnabled = "ptrace_enforcement_enabled"
+	BPFVarSelfPid                  = "self_pid"
+	BPFVarUnusedConnectEvent       = "unused_connect_event"
+	BPFVarUnusedEventHdr           = "unused_event_hdr"
+	BPFVarUnusedExecEvent          = "unused_exec_event"
+	BPFVarUnusedIouringEvent       = "unused_iouring_event"
+	BPFVarUnusedKmodEvent          = "unused_kmod_event"
+	BPFVarUnusedLpeEvent           = "unused_lpe_event"
+	BPFVarUnusedOpenEvent          = "unused_open_event"
+	BPFVarUnusedPtraceEvent        = "unused_ptrace_event"
+)
 
 // LoadBPF returns the embedded CollectionSpec for BPF.
 func LoadBPF() (*ebpf.CollectionSpec, error) {
@@ -118,7 +188,7 @@ func LoadBPF() (*ebpf.CollectionSpec, error) {
 //	*BPFMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadBPFObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadBPFObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadBPF()
 	if err != nil {
 		return err
@@ -133,14 +203,16 @@ func LoadBPFObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
 type BPFSpecs struct {
 	BPFProgramSpecs
 	BPFMapSpecs
+	BPFVariableSpecs
 }
 
-// BPFSpecs contains programs before they are loaded into the kernel.
+// BPFProgramSpecs contains programs before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFProgramSpecs struct {
 	KguardKernelLoadData *ebpf.ProgramSpec `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.ProgramSpec `ebpf:"kguard_kernel_read_file"`
+	KguardTaskFixSetuid  *ebpf.ProgramSpec `ebpf:"kguard_task_fix_setuid"`
 	LsmBpfCmd            *ebpf.ProgramSpec `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
 	LsmFileOpen          *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
@@ -163,20 +235,34 @@ type BPFProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFMapSpecs struct {
-	AllowedPtraceAttaches    *ebpf.MapSpec `ebpf:"allowed_ptrace_attaches"`
-	BlockedPaths             *ebpf.MapSpec `ebpf:"blocked_paths"`
-	BlockedWritePaths        *ebpf.MapSpec `ebpf:"blocked_write_paths"`
-	ContainerCgroups         *ebpf.MapSpec `ebpf:"container_cgroups"`
-	EnforcementEnabled       *ebpf.MapSpec `ebpf:"enforcement_enabled"`
-	ExecScratchMap           *ebpf.MapSpec `ebpf:"exec_scratch_map"`
-	KmodEnforcementEnabled   *ebpf.MapSpec `ebpf:"kmod_enforcement_enabled"`
-	LineageMap               *ebpf.MapSpec `ebpf:"lineage_map"`
-	PtraceEnforcementEnabled *ebpf.MapSpec `ebpf:"ptrace_enforcement_enabled"`
-	Rb                       *ebpf.MapSpec `ebpf:"rb"`
-	ScratchMap               *ebpf.MapSpec `ebpf:"scratch_map"`
-	SelfPid                  *ebpf.MapSpec `ebpf:"self_pid"`
-	SensitiveWritePaths      *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
-	SuspiciousPaths          *ebpf.MapSpec `ebpf:"suspicious_paths"`
+	AllowedPtraceAttaches *ebpf.MapSpec `ebpf:"allowed_ptrace_attaches"`
+	BlockedPaths          *ebpf.MapSpec `ebpf:"blocked_paths"`
+	BlockedWritePaths     *ebpf.MapSpec `ebpf:"blocked_write_paths"`
+	ContainerCgroups      *ebpf.MapSpec `ebpf:"container_cgroups"`
+	ExecScratchMap        *ebpf.MapSpec `ebpf:"exec_scratch_map"`
+	LineageMap            *ebpf.MapSpec `ebpf:"lineage_map"`
+	Rb                    *ebpf.MapSpec `ebpf:"rb"`
+	ScratchMap            *ebpf.MapSpec `ebpf:"scratch_map"`
+	SensitiveWritePaths   *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
+	SuspiciousPaths       *ebpf.MapSpec `ebpf:"suspicious_paths"`
+}
+
+// BPFVariableSpecs contains global variables before they are loaded into the kernel.
+//
+// It can be passed ebpf.CollectionSpec.Assign.
+type BPFVariableSpecs struct {
+	EnforcementEnabled       *ebpf.VariableSpec `ebpf:"enforcement_enabled"`
+	KmodEnforcementEnabled   *ebpf.VariableSpec `ebpf:"kmod_enforcement_enabled"`
+	PtraceEnforcementEnabled *ebpf.VariableSpec `ebpf:"ptrace_enforcement_enabled"`
+	SelfPid                  *ebpf.VariableSpec `ebpf:"self_pid"`
+	UnusedConnectEvent       *ebpf.VariableSpec `ebpf:"unused_connect_event"`
+	UnusedEventHdr           *ebpf.VariableSpec `ebpf:"unused_event_hdr"`
+	UnusedExecEvent          *ebpf.VariableSpec `ebpf:"unused_exec_event"`
+	UnusedIouringEvent       *ebpf.VariableSpec `ebpf:"unused_iouring_event"`
+	UnusedKmodEvent          *ebpf.VariableSpec `ebpf:"unused_kmod_event"`
+	UnusedLpeEvent           *ebpf.VariableSpec `ebpf:"unused_lpe_event"`
+	UnusedOpenEvent          *ebpf.VariableSpec `ebpf:"unused_open_event"`
+	UnusedPtraceEvent        *ebpf.VariableSpec `ebpf:"unused_ptrace_event"`
 }
 
 // BPFObjects contains all objects after they have been loaded into the kernel.
@@ -185,6 +271,7 @@ type BPFMapSpecs struct {
 type BPFObjects struct {
 	BPFPrograms
 	BPFMaps
+	BPFVariables
 }
 
 func (o *BPFObjects) Close() error {
@@ -198,20 +285,16 @@ func (o *BPFObjects) Close() error {
 //
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFMaps struct {
-	AllowedPtraceAttaches    *ebpf.Map `ebpf:"allowed_ptrace_attaches"`
-	BlockedPaths             *ebpf.Map `ebpf:"blocked_paths"`
-	BlockedWritePaths        *ebpf.Map `ebpf:"blocked_write_paths"`
-	ContainerCgroups         *ebpf.Map `ebpf:"container_cgroups"`
-	EnforcementEnabled       *ebpf.Map `ebpf:"enforcement_enabled"`
-	ExecScratchMap           *ebpf.Map `ebpf:"exec_scratch_map"`
-	KmodEnforcementEnabled   *ebpf.Map `ebpf:"kmod_enforcement_enabled"`
-	LineageMap               *ebpf.Map `ebpf:"lineage_map"`
-	PtraceEnforcementEnabled *ebpf.Map `ebpf:"ptrace_enforcement_enabled"`
-	Rb                       *ebpf.Map `ebpf:"rb"`
-	ScratchMap               *ebpf.Map `ebpf:"scratch_map"`
-	SelfPid                  *ebpf.Map `ebpf:"self_pid"`
-	SensitiveWritePaths      *ebpf.Map `ebpf:"sensitive_write_paths"`
-	SuspiciousPaths          *ebpf.Map `ebpf:"suspicious_paths"`
+	AllowedPtraceAttaches *ebpf.Map `ebpf:"allowed_ptrace_attaches"`
+	BlockedPaths          *ebpf.Map `ebpf:"blocked_paths"`
+	BlockedWritePaths     *ebpf.Map `ebpf:"blocked_write_paths"`
+	ContainerCgroups      *ebpf.Map `ebpf:"container_cgroups"`
+	ExecScratchMap        *ebpf.Map `ebpf:"exec_scratch_map"`
+	LineageMap            *ebpf.Map `ebpf:"lineage_map"`
+	Rb                    *ebpf.Map `ebpf:"rb"`
+	ScratchMap            *ebpf.Map `ebpf:"scratch_map"`
+	SensitiveWritePaths   *ebpf.Map `ebpf:"sensitive_write_paths"`
+	SuspiciousPaths       *ebpf.Map `ebpf:"suspicious_paths"`
 }
 
 func (m *BPFMaps) Close() error {
@@ -220,17 +303,31 @@ func (m *BPFMaps) Close() error {
 		m.BlockedPaths,
 		m.BlockedWritePaths,
 		m.ContainerCgroups,
-		m.EnforcementEnabled,
 		m.ExecScratchMap,
-		m.KmodEnforcementEnabled,
 		m.LineageMap,
-		m.PtraceEnforcementEnabled,
 		m.Rb,
 		m.ScratchMap,
-		m.SelfPid,
 		m.SensitiveWritePaths,
 		m.SuspiciousPaths,
 	)
+}
+
+// BPFVariables contains all global variables after they have been loaded into the kernel.
+//
+// It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
+type BPFVariables struct {
+	EnforcementEnabled       *ebpf.Variable `ebpf:"enforcement_enabled"`
+	KmodEnforcementEnabled   *ebpf.Variable `ebpf:"kmod_enforcement_enabled"`
+	PtraceEnforcementEnabled *ebpf.Variable `ebpf:"ptrace_enforcement_enabled"`
+	SelfPid                  *ebpf.Variable `ebpf:"self_pid"`
+	UnusedConnectEvent       *ebpf.Variable `ebpf:"unused_connect_event"`
+	UnusedEventHdr           *ebpf.Variable `ebpf:"unused_event_hdr"`
+	UnusedExecEvent          *ebpf.Variable `ebpf:"unused_exec_event"`
+	UnusedIouringEvent       *ebpf.Variable `ebpf:"unused_iouring_event"`
+	UnusedKmodEvent          *ebpf.Variable `ebpf:"unused_kmod_event"`
+	UnusedLpeEvent           *ebpf.Variable `ebpf:"unused_lpe_event"`
+	UnusedOpenEvent          *ebpf.Variable `ebpf:"unused_open_event"`
+	UnusedPtraceEvent        *ebpf.Variable `ebpf:"unused_ptrace_event"`
 }
 
 // BPFPrograms contains all programs after they have been loaded into the kernel.
@@ -239,6 +336,7 @@ func (m *BPFMaps) Close() error {
 type BPFPrograms struct {
 	KguardKernelLoadData *ebpf.Program `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.Program `ebpf:"kguard_kernel_read_file"`
+	KguardTaskFixSetuid  *ebpf.Program `ebpf:"kguard_task_fix_setuid"`
 	LsmBpfCmd            *ebpf.Program `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.Program `ebpf:"lsm_bprm_check"`
 	LsmFileOpen          *ebpf.Program `ebpf:"lsm_file_open"`
@@ -261,6 +359,7 @@ func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.KguardKernelLoadData,
 		p.KguardKernelReadFile,
+		p.KguardTaskFixSetuid,
 		p.LsmBpfCmd,
 		p.LsmBprmCheck,
 		p.LsmFileOpen,

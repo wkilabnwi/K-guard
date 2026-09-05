@@ -160,8 +160,7 @@ struct syscall_write_args {
 SEC("lsm/file_open")
 int BPF_PROG(lsm_file_open, struct file *file) {
     __u32 zero = 0;
-    __u8 *enabled = bpf_map_lookup_elem(&enforcement_enabled, &zero);
-    if (!enabled || *enabled == 0) return 0;
+    if (!enforcement_enabled) return 0;
 
     unsigned int f_flags = BPF_CORE_READ(file, f_flags);
 

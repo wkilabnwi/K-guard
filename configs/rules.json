@@ -74,10 +74,10 @@
   "sensitive_write_paths": ["/tmp/"],
   "blocked_write_paths" : ["/tmp/serbs.txt"],
 
-  "ptrace_enforcement_enabled": true,
+  "ptrace_enforcement_enabled": false,
   "allowed_ptrace_attaches": ["/usr/bin/systemd"],
 
-  "kmod_enforcement_enabled": true,
+  "kmod_enforcement_enabled": false,
 
   "enforcement_enabled": true,
   "dedup_window_seconds": 10,

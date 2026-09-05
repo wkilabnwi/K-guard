@@ -28,6 +28,7 @@ it, a BPF LSM hook:
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
 | `PTRACE_BLOCKED`|`lsm/ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
+| `LPE_BLOCKED` | `lsm/task_fix_setuid` | Pre-emptively blocks a UID transition to root unless the process legitimately gained it via a setuid-root binary, tracked in kernel-side lineage |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
 `KMOD_BLOCKED` | `lsm/kernel_read_file, lsm/kernel_load_data` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
 | `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
@@ -47,6 +48,7 @@ it, a BPF LSM hook:
   - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
   - **Ptrace Prevention**: When `ptrace_enforcement_enabled`: true and LSM hooks are active, `lsm/ptrace_access_check` blocks unauthorized injection attempts unless the caller matches the `allowed_ptrace_attaches` whitelist.
   - **Kernel Module Load Prevention**: Intercepts `init_module` calls and blocks them at the kernel boundary when originating from tracked container cgroups registered in the `container_cgroups` BPF map.
+  - **Privilege Escalation Prevention**: `lsm/task_fix_setuid` blocks a process from gaining UID 0 (`-EPERM`) unless it exec'd a setuid-root binary first.
   - **Agent Self-Protection**:
     - `lsm/task_kill` intercepts termination signals targeted at K-Guard's PID and rejects them (`-EPERM`) unless sent by K-Guard itself or PID 1.
     - `lsm/bpf` restricts critical eBPF system calls (`BPF_LINK_DETACH`, `BPF_MAP_GET_FD_BY_ID`, `BPF_PROG_GET_FD_BY_ID`, etc.) to prevent hostile processes from detaching or inspecting K-Guard's in-kernel security filters.
@@ -54,6 +56,12 @@ it, a BPF LSM hook:
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading
 any programs. Detection keeps running either way.
+
+Kill-switches and self-protection state (`enforcement_enabled`,
+`ptrace_enforcement_enabled`, `kmod_enforcement_enabled`, `self_pid`) are
+plain BPF global variables (`.bss`), not map entries. Userspace reads/writes
+them via cilium/ebpf's `*ebpf.Variable` API (`m.Objects.EnforcementEnabled.Set(...)`)
+rather than a raw map lookup, requires `github.com/cilium/ebpf` v0.17+.
 
 ## Rule engine
 

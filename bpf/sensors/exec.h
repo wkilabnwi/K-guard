@@ -78,7 +78,12 @@ int tp_schedfork(struct sched_process_fork_args *ctx) {
     struct process_lineage *parent_lin = bpf_map_lookup_elem(&lineage_map, &ppid);
     if (parent_lin) {
         child_lin->suspicious_ancestor = parent_lin->suspicious_ancestor;
+        child_lin->expected_uid = parent_lin->expected_uid;
+        child_lin->setuid_allowed = parent_lin->setuid_allowed;
         __builtin_memcpy(child_lin->ancestor_filename, parent_lin->ancestor_filename, sizeof(child_lin->ancestor_filename));
+    } else {
+        child_lin->expected_uid = (__u32)bpf_get_current_uid_gid();
+        child_lin->setuid_allowed = 0;
     }
 
     bpf_map_update_elem(&lineage_map, &cpid, child_lin, BPF_ANY);
