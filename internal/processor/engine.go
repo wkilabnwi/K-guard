@@ -99,25 +99,53 @@ func isSuspiciousPath(target string, filenames []string) bool {
 	return false
 }
 
-// matchesRule sees if the filename matches the Pattern that was set for it in the config file
-func matchesRule(r config.Rule, sus []string, filename string, h *execHash) (bool, error) {
-	if r.SuspiciousPathOnly && !isSuspiciousPath(filename, sus) {
-		return false, nil
+// evaluateCEL executes the pre-compiled AST for a rule against event context
+func evaluateCEL(r config.Rule, celCtx config.EventContext) bool {
+	if r.Program == nil {
+		return false
 	}
-	switch r.Match {
-	case config.MatchExactPath:
-		return filename == r.Pattern, nil
-	case config.MatchBasename:
-		return filepath.Base(filename) == r.Pattern, nil
-	case config.MatchPrefix:
-		return strings.HasPrefix(filename, r.Pattern), nil
-	case config.MatchSubstring:
-		return strings.Contains(filename, r.Pattern), nil
-	case config.MatchSHA256:
-		return matchesSHA256(h, r.Pattern)
-	default:
-		return false, nil
+
+	input := map[string]interface{}{
+		"event": map[string]interface{}{
+			"type":                celCtx.Type,
+			"ancestor_suspicious": celCtx.AncestorSuspicious,
+			"ancestor_filename":   celCtx.AncestorFilename,
+			"is_suspicious_path":  celCtx.IsSuspiciousPath,
+			"process": map[string]interface{}{
+				"path":        celCtx.Process.Path,
+				"basename":    celCtx.Process.Basename,
+				"sha256":      celCtx.Process.SHA256,
+				"pid":         celCtx.Process.PID,
+				"ppid":        celCtx.Process.PPID,
+				"uid":         celCtx.Process.UID,
+				"gid":         celCtx.Process.GID,
+				"comm":        celCtx.Process.Comm,
+				"args":        celCtx.Process.Args,
+				"is_fileless": celCtx.Process.IsFileless,
+			},
+		},
+		"process": map[string]interface{}{
+			"path":        celCtx.Process.Path,
+			"basename":    celCtx.Process.Basename,
+			"sha256":      celCtx.Process.SHA256,
+			"pid":         celCtx.Process.PID,
+			"ppid":        celCtx.Process.PPID,
+			"uid":         celCtx.Process.UID,
+			"gid":         celCtx.Process.GID,
+			"comm":        celCtx.Process.Comm,
+			"args":        celCtx.Process.Args,
+			"is_fileless": celCtx.Process.IsFileless,
+		},
 	}
+
+	out, _, err := r.Program.Eval(input)
+	if err != nil {
+		log.Printf("[engine] CEL evaluation error in rule %q: %v", r.Name, err)
+		return false
+	}
+
+	matched, ok := out.Value().(bool)
+	return ok && matched
 }
 
 // isAllowlisted checks if the our filename matches either a trusted entry
@@ -182,16 +210,35 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		return
 	}
 
+	// Prepare CEL evaluation context payload
+	shaVal, err := h.get()
+	if err != nil {
+		e.metrics.IncHashCheckError()
+	}
+
+	argList := strings.Fields(args)
+
+	celCtx := config.EventContext{
+		Type:               "EXEC",
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		IsSuspiciousPath:   isSuspiciousPath(filename, cfg.SuspiciousPaths),
+		Process: config.ProcessContext{
+			Path:       filename,
+			Basename:   filepath.Base(filename),
+			SHA256:     shaVal,
+			PID:        int64(pid),
+			PPID:       int64(ppid),
+			UID:        int64(uid),
+			GID:        int64(gid),
+			Comm:       comm,
+			Args:       argList,
+			IsFileless: isFileless,
+		},
+	}
+
 	for _, r := range cfg.Rules {
-		matched, err := matchesRule(r, cfg.SuspiciousPaths, filename, h)
-		if err != nil {
-			// For now only the Hash check might return an error so we only account for that specific case
-			e.metrics.IncHashCheckError()
-			log.Printf("[engine] rule %q: could not verify SHA256 for pid %d comm %q (%s): %v",
-				r.Name, pid, comm, filename, err)
-			continue
-		}
-		if !matched {
+		if !evaluateCEL(r, celCtx) {
 			continue
 		}
 

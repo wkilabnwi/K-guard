@@ -65,16 +65,16 @@ func diffRules(old, new []Rule) []string {
 	for name, nr := range newByName {
 		or, existed := oldByName[name]
 		if !existed {
-			changes = append(changes, fmt.Sprintf("rule %q added (%s %s, %s/%s)", name, nr.Match, nr.Pattern, nr.Severity, nr.Action))
+			changes = append(changes, fmt.Sprintf("rule %q added (%s/%s)", name, nr.Severity, nr.Action))
 			continue
 		}
-		if or != nr {
-			changes = append(changes, fmt.Sprintf("rule %q changed: %s", name, ruleFieldDiff(or, nr)))
+		if or.Expression != nr.Expression || or.Severity != nr.Severity || or.Action != nr.Action {
+			changes = append(changes, fmt.Sprintf("rule %q changed expression/action", name))
 		}
 	}
-	for name, or := range oldByName {
+	for name := range oldByName {
 		if _, stillExists := newByName[name]; !stillExists {
-			changes = append(changes, fmt.Sprintf("rule %q removed (was %s %s, %s/%s)", name, or.Match, or.Pattern, or.Severity, or.Action))
+			changes = append(changes, fmt.Sprintf("rule %q removed", name))
 		}
 	}
 	return changes
@@ -82,20 +82,14 @@ func diffRules(old, new []Rule) []string {
 
 func ruleFieldDiff(old, new Rule) string {
 	var parts []string
-	if old.Match != new.Match {
-		parts = append(parts, fmt.Sprintf("match %s->%s", old.Match, new.Match))
-	}
-	if old.Pattern != new.Pattern {
-		parts = append(parts, fmt.Sprintf("pattern %q->%q", old.Pattern, new.Pattern))
+	if old.Expression != new.Expression {
+		parts = append(parts, fmt.Sprintf("expression %q -> %q", old.Expression, new.Expression))
 	}
 	if old.Severity != new.Severity {
-		parts = append(parts, fmt.Sprintf("severity %s->%s", old.Severity, new.Severity))
+		parts = append(parts, fmt.Sprintf("severity %s -> %s", old.Severity, new.Severity))
 	}
 	if old.Action != new.Action {
-		parts = append(parts, fmt.Sprintf("action %s->%s", old.Action, new.Action))
-	}
-	if old.SuspiciousPathOnly != new.SuspiciousPathOnly {
-		parts = append(parts, fmt.Sprintf("suspicious_path_only %v->%v", old.SuspiciousPathOnly, new.SuspiciousPathOnly))
+		parts = append(parts, fmt.Sprintf("action %s -> %s", old.Action, new.Action))
 	}
 	return joinComma(parts)
 }

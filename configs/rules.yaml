@@ -1,0 +1,82 @@
+rules:
+  - name: "Reverse shell (nc), known path, hard block"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path == '/usr/bin/nc'"
+
+  - name: "Test env block"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path == '/bin/env'"
+
+  - name: "Reverse shell (nc) from suspicious path, detect+kill"
+    severity: "critical"
+    action: "KILL"
+    expression: "process.basename == 'nc' && event.is_suspicious_path"
+
+  - name: "Crypto miner (xmrig) : known path, hard block"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path == '/usr/local/bin/xmrig'"
+
+  - name: "Crypto miner (xmrig) : tmp path hard block"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path == '/tmp/xmrig'"
+
+  - name: "Raw socket sniffer (tcpdump) outside admin allowlist"
+    severity: "medium"
+    action: "ALERT"
+    expression: "process.basename == 'tcpdump' && event.is_suspicious_path"
+
+  - name: "Binary executed from /dev/shm"
+    severity: "high"
+    action: "KILL"
+    expression: "process.path.startsWith('/dev/shm/')"
+
+allowlist:
+  - "/usr/bin/tcpdump"
+  - "/usr/sbin/tcpdump"
+
+kubelet_url: "https://127.0.0.1:10250"
+kubelet_insecure: true
+proc_path: "/proc"
+cgroup_path: "/sys/fs/cgroup"
+kubelet_cert_file: "/var/lib/rancher/k3s/server/tls/client-admin.crt"
+kubelet_key_file: "/var/lib/rancher/k3s/server/tls/client-admin.key"
+
+protected_pids: []
+protected_comms:
+  - "/usr/sbin/sshd"
+  - "/usr/bin/systemd"
+
+suspicious_path:
+  - "/testkill/"
+  - "/tmp/"
+
+ignored_connect_comms:
+  - "/usr/sbin/sshd"
+  - "/usr/bin/docker"
+  - "/var/lib/rancher/k3s/data/current/bin/k3s"
+
+sensitive_write_paths:
+  - "/tmp/"
+
+blocked_write_paths:
+  - "/tmp/serbs.txt"
+
+ptrace_enforcement_enabled: false
+allowed_ptrace_attaches:
+  - "/usr/bin/systemd"
+
+kmod_enforcement_enabled: false
+enforcement_enabled: true
+dedup_window_seconds: 10
+
+sinks:
+  stdout: true
+  syslog: false
+  webhook_url: ""
+  store_path: "/var/lib/kguard/"
+  metrics_listen_addr: "127.0.0.1:9090"
+  dashboard_listen_addr: ":8080"

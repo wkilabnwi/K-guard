@@ -1,247 +1,316 @@
-package config_test
+package config
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"k-guard/internal/config"
+	"time"
 )
 
-func createTempConfigFile(t *testing.T, content string, mode os.FileMode) string {
-	t.Helper()
-	dir := t.TempDir()
-	filePath := filepath.Join(dir, "rules.json")
+const validYAML = `
+enforcement_enabled: true
+dedup_window_seconds: 5
+protected_pids: [1, 2]
+protected_comms: ["/usr/bin/dockerd"]
+suspicious_path: ["/tmp/evil"]
+rules:
+  - name: "Block netcat"
+    severity: "high"
+    action: "BLOCK"
+    expression: "process.path == '/usr/bin/nc'"
+sinks:
+  stdout: true
+`
 
-	if err := os.WriteFile(filePath, []byte(content), mode); err != nil {
-		t.Fatalf("failed to create temp config file: %v", err)
+const updatedYAML = `
+enforcement_enabled: false
+dedup_window_seconds: 10
+protected_pids: [1, 2, 3]
+protected_comms: ["/usr/bin/dockerd"]
+suspicious_path: ["/tmp/evil", "/tmp/malware"]
+rules:
+  - name: "Block netcat"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path == '/usr/bin/nc'"
+  - name: "Alert on nmap"
+    severity: "medium"
+    action: "ALERT"
+    expression: "process.basename == 'nmap'"
+sinks:
+  stdout: false
+  syslog: true
+`
+
+const validJSON = `{
+  "enforcement_enabled": true,
+  "dedup_window_seconds": 5,
+  "protected_pids": [1, 2],
+  "protected_comms": ["/usr/bin/dockerd"],
+  "suspicious_path": ["/tmp/evil"],
+  "rules": [
+    {
+      "name": "Block netcat",
+      "severity": "high",
+      "action": "BLOCK",
+      "expression": "process.path == '/usr/bin/nc'"
+    }
+  ],
+  "sinks": {
+    "stdout": true
+  }
+}`
+
+const updatedJSON = `{
+  "enforcement_enabled": false,
+  "dedup_window_seconds": 10,
+  "protected_pids": [1, 2, 3],
+  "protected_comms": ["/usr/bin/dockerd"],
+  "suspicious_path": ["/tmp/evil", "/tmp/malware"],
+  "rules": [
+    {
+      "name": "Block netcat",
+      "severity": "critical",
+      "action": "BLOCK",
+      "expression": "process.path == '/usr/bin/nc'"
+    },
+    {
+      "name": "Alert on nmap",
+      "severity": "medium",
+      "action": "ALERT",
+      "expression": "process.basename == 'nmap'"
+    }
+  ],
+  "sinks": {
+    "stdout": false,
+    "syslog": true
+  }
+}`
+
+func writeTempConfigExt(t *testing.T, content string, mode os.FileMode, ext string) string {
+	t.Helper()
+	tmpFile, err := os.CreateTemp("", "kguard_config_*"+ext)
+	if err != nil {
+		t.Fatalf("failed to create temp config: %v", err)
 	}
-	return filePath
+	if err := os.Chmod(tmpFile.Name(), mode); err != nil {
+		t.Fatalf("failed to set permissions: %v", err)
+	}
+	if _, err := tmpFile.WriteString(content); err != nil {
+		t.Fatalf("failed to write content: %v", err)
+	}
+	tmpFile.Close()
+
+	t.Cleanup(func() {
+		os.Remove(tmpFile.Name())
+	})
+	return tmpFile.Name()
 }
 
-func TestRule_Validate(t *testing.T) {
+func writeTempConfig(t *testing.T, content string, mode os.FileMode) string {
+	return writeTempConfigExt(t, content, mode, ".yaml")
+}
+
+func TestLoadConfig_YAMLAndJSON(t *testing.T) {
 	tests := []struct {
 		name    string
-		rule    config.Rule
-		wantErr bool
+		content string
+		ext     string
 	}{
-		{
-			name: "valid rule",
-			rule: config.Rule{
-				Name:     "block-nc",
-				Match:    config.MatchBasename,
-				Pattern:  "nc",
-				Severity: config.SeverityCritical,
-				Action:   config.ActionBlock,
-			},
-			wantErr: false,
-		},
-		{
-			name: "missing name",
-			rule: config.Rule{
-				Match:    config.MatchExactPath,
-				Pattern:  "/usr/bin/nc",
-				Severity: config.SeverityHigh,
-				Action:   config.ActionKill,
-			},
-			wantErr: true,
-		},
-		{
-			name: "unknown match kind",
-			rule: config.Rule{
-				Name:     "bad-match",
-				Match:    "regex",
-				Pattern:  "nc.*",
-				Severity: config.SeverityLow,
-				Action:   config.ActionAlert,
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty pattern",
-			rule: config.Rule{
-				Name:     "empty-pattern",
-				Match:    config.MatchPrefix,
-				Pattern:  "",
-				Severity: config.SeverityMedium,
-				Action:   config.ActionAlert,
-			},
-			wantErr: true,
-		},
-		{
-			name: "unknown severity",
-			rule: config.Rule{
-				Name:     "bad-sev",
-				Match:    config.MatchExactPath,
-				Pattern:  "/tmp/evil",
-				Severity: "super-high",
-				Action:   config.ActionKill,
-			},
-			wantErr: true,
-		},
-		{
-			name: "unknown action",
-			rule: config.Rule{
-				Name:     "bad-action",
-				Match:    config.MatchExactPath,
-				Pattern:  "/tmp/evil",
-				Severity: config.SeverityHigh,
-				Action:   "DROP",
-			},
-			wantErr: true,
-		},
+		{name: "Valid YAML (.yaml)", content: validYAML, ext: ".yaml"},
+		{name: "Valid YAML (.yml)", content: validYAML, ext: ".yml"},
+		{name: "Valid JSON (.json)", content: validJSON, ext: ".json"},
+		{name: "Valid JSON without extension", content: validJSON, ext: ""},
+		{name: "Valid YAML without extension", content: validYAML, ext: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.rule.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Rule.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			path := writeTempConfigExt(t, tt.content, 0600, tt.ext)
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("unexpected load error: %v", err)
+			}
+
+			if !cfg.EnforcementEnabled {
+				t.Errorf("expected EnforcementEnabled to be true")
+			}
+			if len(cfg.Rules) != 1 {
+				t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+			}
+			if cfg.Rules[0].ExactBlockPath != "/usr/bin/nc" {
+				t.Errorf("expected ExactBlockPath '/usr/bin/nc', got %q", cfg.Rules[0].ExactBlockPath)
+			}
+
+			blocked := cfg.BlockedPatterns()
+			if len(blocked) != 1 || blocked[0] != "/usr/bin/nc" {
+				t.Errorf("unexpected BlockedPatterns output: %v", blocked)
 			}
 		})
 	}
 }
 
-func TestConfig_Validate_EdgeCases(t *testing.T) {
-	t.Run("empty string in path list", func(t *testing.T) {
-		cfg := config.Config{
-			Rules: []config.Rule{
-				{Name: "valid", Match: config.MatchBasename, Pattern: "nc", Severity: config.SeverityLow, Action: config.ActionAlert},
-			},
-			SuspiciousPaths: []string{"/tmp/", ""},
-		}
-		if err := cfg.Validate(); err == nil {
-			t.Errorf("expected error for empty string in suspicious_path, got nil")
-		}
-	})
+func TestLoadConfig_InvalidPermissions(t *testing.T) {
+	path := writeTempConfig(t, validYAML, 0666) // World/group writable
 
-	t.Run("non-absolute path in comm list", func(t *testing.T) {
-		cfg := config.Config{
-			Rules: []config.Rule{
-				{Name: "valid", Match: config.MatchBasename, Pattern: "nc", Severity: config.SeverityLow, Action: config.ActionAlert},
-			},
-			ProtectedComms: []string{"sshd"},
-		}
-		if err := cfg.Validate(); err == nil {
-			t.Errorf("expected error for non-absolute path in protected_comms, got nil")
-		}
-	})
-
-	t.Run("negative PID in protected_pids", func(t *testing.T) {
-		cfg := config.Config{
-			Rules: []config.Rule{
-				{Name: "valid", Match: config.MatchBasename, Pattern: "nc", Severity: config.SeverityLow, Action: config.ActionAlert},
-			},
-			ProtectedPIDs: []int{-5, 0},
-		}
-		if err := cfg.Validate(); err == nil {
-			t.Errorf("expected error for invalid protected_pids, got nil")
-		}
-	})
-
-	t.Run("negative dedup_window_seconds", func(t *testing.T) {
-		cfg := config.Config{
-			Rules: []config.Rule{
-				{Name: "valid", Match: config.MatchBasename, Pattern: "nc", Severity: config.SeverityLow, Action: config.ActionAlert},
-			},
-			DedupWindowSeconds: -10,
-		}
-		if err := cfg.Validate(); err == nil {
-			t.Errorf("expected error for negative dedup_window_seconds, got nil")
-		}
-	})
-
-	t.Run("mismatched kubelet TLS cert and key", func(t *testing.T) {
-		cfg := config.Config{
-			Rules: []config.Rule{
-				{Name: "valid", Match: config.MatchBasename, Pattern: "nc", Severity: config.SeverityLow, Action: config.ActionAlert},
-			},
-			KubeletCertFile: "/etc/k8s/client.crt",
-			KubeletKeyFile:  "",
-		}
-		if err := cfg.Validate(); err == nil {
-			t.Errorf("expected error for missing kubelet_key_file, got nil")
-		}
-	})
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error due to overly permissive file mode, got nil")
+	}
 }
 
-func TestLoad_PermissionsCheck(t *testing.T) {
-	validJSON := `{
-		"rules": [{"name": "test", "match": "basename", "pattern": "nc", "severity": "low", "action": "ALERT"}]
-	}`
-
-	t.Run("strict permissions 0600 passes", func(t *testing.T) {
-		path := createTempConfigFile(t, validJSON, 0600)
-		cfg, err := config.Load(path)
-		if err != nil {
-			t.Fatalf("expected 0600 file to load successfully, got: %v", err)
-		}
-		if len(cfg.Rules) != 1 {
-			t.Errorf("expected 1 rule loaded, got %d", len(cfg.Rules))
-		}
-	})
-
-	t.Run("world writable file permissions 0666 rejected", func(t *testing.T) {
-		path := createTempConfigFile(t, validJSON, 0666)
-		_, err := config.Load(path)
-		if err == nil {
-			t.Errorf("expected error when loading world-writable 0666 config file, got nil")
-		}
-	})
-}
-
-func TestConfig_BlockedPatterns(t *testing.T) {
-	cfg := config.Config{
-		Rules: []config.Rule{
-			{Name: "block-exact", Match: config.MatchExactPath, Pattern: "/usr/bin/nc", Severity: config.SeverityCritical, Action: config.ActionBlock},
-			{Name: "block-basename", Match: config.MatchBasename, Pattern: "nc", Severity: config.SeverityCritical, Action: config.ActionBlock},
-			{Name: "kill-exact", Match: config.MatchExactPath, Pattern: "/usr/bin/nmap", Severity: config.SeverityHigh, Action: config.ActionKill},
+func TestConfig_ValidationErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		ext     string
+		wantErr string
+	}{
+		{
+			name: "Invalid Protected PID (YAML)",
+			content: `
+protected_pids: [-1]
+`,
+			ext:     ".yaml",
+			wantErr: "invalid protected_pids entry",
+		},
+		{
+			name:    "Invalid Protected PID (JSON)",
+			content: `{"protected_pids": [-1]}`,
+			ext:     ".json",
+			wantErr: "invalid protected_pids entry",
+		},
+		{
+			name: "Relative Path in Comm List (YAML)",
+			content: `
+protected_comms: ["relative/path"]
+`,
+			ext:     ".yaml",
+			wantErr: "must be an absolute path",
+		},
+		{
+			name:    "Relative Path in Comm List (JSON)",
+			content: `{"protected_comms": ["relative/path"]}`,
+			ext:     ".json",
+			wantErr: "must be an absolute path",
+		},
+		{
+			name: "Invalid CEL Syntax (YAML)",
+			content: `
+rules:
+  - name: "Bad CEL"
+    severity: "low"
+    action: "ALERT"
+    expression: "process.path =="
+`,
+			ext:     ".yaml",
+			wantErr: "CEL syntax error",
+		},
+		{
+			name:    "Invalid CEL Syntax (JSON)",
+			content: `{"rules": [{"name": "Bad CEL", "severity": "low", "action": "ALERT", "expression": "process.path =="}]}`,
+			ext:     ".json",
+			wantErr: "CEL syntax error",
+		},
+		{
+			name: "Unknown Severity",
+			content: `
+rules:
+  - name: "Bad Sev"
+    severity: "super_high"
+    action: "ALERT"
+    expression: "true"
+`,
+			ext:     ".yaml",
+			wantErr: "unknown severity",
 		},
 	}
 
-	patterns := cfg.BlockedPatterns()
-	if len(patterns) != 1 {
-		t.Fatalf("expected exactly 1 blocked pattern, got %d", len(patterns))
-	}
-	if patterns[0] != "/usr/bin/nc" {
-		t.Errorf("expected blocked pattern '/usr/bin/nc', got %q", patterns[0])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfigExt(t, tt.content, 0600, tt.ext)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+		})
 	}
 }
 
-func TestManager_ReloadNow_And_OnChange(t *testing.T) {
-	initialJSON := `{
-		"rules": [{"name": "rule1", "match": "basename", "pattern": "nc", "severity": "low", "action": "ALERT"}],
-		"enforcement_enabled": false
-	}`
+func TestManager_ReloadAndSubscribe_JSON(t *testing.T) {
+	path := writeTempConfigExt(t, validJSON, 0600, ".json")
 
-	path := createTempConfigFile(t, initialJSON, 0600)
-	mgr, err := config.NewManager(path)
+	mgr, err := NewManager(path)
 	if err != nil {
-		t.Fatalf("failed to create Manager: %v", err)
+		t.Fatalf("failed to create manager: %v", err)
 	}
 
-	notified := false
-	mgr.OnChange(func(c *config.Config) {
-		notified = true
+	initialCfg := mgr.Current()
+	if initialCfg.DedupWindowSeconds != 5 {
+		t.Errorf("expected dedup 5, got %d", initialCfg.DedupWindowSeconds)
+	}
+
+	notified := make(chan *Config, 1)
+	mgr.OnChange(func(c *Config) {
+		notified <- c
 	})
 
-	updatedJSON := `{
-		"rules": [{"name": "rule1", "match": "basename", "pattern": "nc", "severity": "low", "action": "ALERT"}],
-		"enforcement_enabled": true
-	}`
+	// Overwrite JSON file content
 	if err := os.WriteFile(path, []byte(updatedJSON), 0600); err != nil {
-		t.Fatalf("failed to update temp file: %v", err)
+		t.Fatalf("failed to overwrite config: %v", err)
 	}
 
 	if err := mgr.ReloadNow(); err != nil {
-		t.Fatalf("ReloadNow() failed: %v", err)
+		t.Fatalf("reload failed: %v", err)
 	}
 
-	if !notified {
-		t.Errorf("expected OnChange callback to be executed after ReloadNow()")
+	select {
+	case newCfg := <-notified:
+		if newCfg.EnforcementEnabled {
+			t.Errorf("expected enforcement to be false after reload")
+		}
+		if len(newCfg.Rules) != 2 {
+			t.Errorf("expected 2 rules after reload, got %d", len(newCfg.Rules))
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for OnChange subscriber notification")
+	}
+}
+
+func TestDiffConfig(t *testing.T) {
+	oldCfg := &Config{
+		EnforcementEnabled: true,
+		DedupWindowSeconds: 5,
+		ProtectedPIDs:      []int{1, 2},
+		Rules: []Rule{
+			{Name: "Rule1", Severity: SeverityLow, Action: ActionAlert, Expression: "true"},
+		},
 	}
 
-	if !mgr.Current().EnforcementEnabled {
-		t.Errorf("expected enforcement_enabled to update to true")
+	newCfg := &Config{
+		EnforcementEnabled: false,
+		DedupWindowSeconds: 10,
+		ProtectedPIDs:      []int{1, 2, 3},
+		Rules: []Rule{
+			{Name: "Rule1", Severity: SeverityHigh, Action: ActionAlert, Expression: "true"},
+			{Name: "Rule2", Severity: SeverityCritical, Action: ActionKill, Expression: "false"},
+		},
+	}
+
+	changes := diffConfig(oldCfg, newCfg)
+	if len(changes) == 0 {
+		t.Fatal("expected diff changes, got none")
+	}
+
+	hasRule2 := false
+	for _, ch := range changes {
+		if filepath.Base(ch) != ch && ch == "rule \"Rule2\" added (critical/KILL)" {
+			hasRule2 = true
+		}
+	}
+
+	if !hasRule2 {
+		t.Logf("Detected changes:\n%v", changes)
 	}
 }

@@ -1,8 +1,9 @@
 // Package config loads and hot-reloads K-Guard's rule/policy configuration
-// from a JSON file
+// from a yaml file
 //
 // JSON was chosen over because i feel much more comfortable handling it
 // changing to YAML isn't that hard you only need to change a couple things
+// (no more JSON now lmao)
 package config
 
 import (
@@ -11,11 +12,33 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"cel.dev/cel-go/cel"
+	"go.yaml.in/yaml/v3"
 )
+
+var (
+	celEnv  *cel.Env
+	celOnce sync.Once
+)
+
+// GetCELEnvironment returns the singleton CEL environment instance
+func GetCELEnvironment() (*cel.Env, error) {
+	var err error
+	celOnce.Do(func() {
+		celEnv, err = cel.NewEnv(
+			cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
+			cel.Variable("process", cel.MapType(cel.StringType, cel.DynType)),
+		)
+	})
+	return celEnv, err
+}
 
 func checkConfigPermissionsFD(f *os.File) error {
 	fi, err := f.Stat()
@@ -31,10 +54,9 @@ func checkConfigPermissionsFD(f *os.File) error {
 
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		if uid := os.Getuid(); uid != 0 && int(st.Uid) != uid {
-			return fmt.Errorf("refusing to load %s: owned by uid %d, not the uid K-Guard is running as (%d)", f.Name(), st.Uid, uid)
+			return fmt.Errorf("refusing to load %s: owned by uid %d, not running uid (%d)", f.Name(), st.Uid, uid)
 		}
 	}
-
 	return nil
 }
 
@@ -55,12 +77,34 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
 
-	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	env, err := GetCELEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("building CEL env: %w", err)
 	}
+
+	var c Config
+	ext := strings.ToLower(filepath.Ext(path))
+
+	switch ext {
+	case ".json":
+		if err := json.Unmarshal(b, &c); err != nil {
+			return nil, fmt.Errorf("parsing JSON config %s: %w", path, err)
+		}
+	case ".yaml", ".yml":
+		if err := yaml.Unmarshal(b, &c); err != nil {
+			return nil, fmt.Errorf("parsing YAML config %s: %w", path, err)
+		}
+	default:
+		// Attempt YAML unmarshaling first (yaml.Unmarshal can also parse valid JSON data)
+		if err := yaml.Unmarshal(b, &c); err != nil {
+			if errJSON := json.Unmarshal(b, &c); errJSON != nil {
+				return nil, fmt.Errorf("parsing config %s as YAML (%v) or JSON (%v)", path, err, errJSON)
+			}
+		}
+	}
+
 	c.applyDefaults()
-	if err := c.Validate(); err != nil {
+	if err := c.Validate(env); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	return &c, nil

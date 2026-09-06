@@ -1,11 +1,6 @@
 # K-Guard
 
-K-Guard is a lightweight Linux host intrusion detection (and, where the
-kernel supports it, pre-execution *prevention*) agent built on eBPF. It
-watches a set of security-relevant syscalls and kernel events, evaluates
-them against a hot-reloadable JSON rule set, and fans matching alerts out
-to one or more sinks (stdout, syslog, a webhook, a local JSON-Lines
-store, and a small read-only web dashboard).
+K-Guard is a lightweight Linux host intrusion detection and pre-execution *prevention* agent built on eBPF. It monitors security-relevant syscalls and kernel events, evaluates them against a hot-reloadable CEL-based rule engine (supporting both **YAML** and **JSON** formats), and fans matching alerts out to multiple sinks (stdout, syslog, webhook, local JSON-Lines storage, and a read-only web dashboard).
 For any question, feel free to contact louai.sahli1@gmail.com.
 
 ## DEMO
@@ -63,68 +58,99 @@ plain BPF global variables (`.bss`), not map entries. Userspace reads/writes
 them via cilium/ebpf's `*ebpf.Variable` API (`m.Objects.EnforcementEnabled.Set(...)`)
 rather than a raw map lookup, requires `github.com/cilium/ebpf` v0.17+.
 
-## Rule engine
+## Rule engine & Configuration Formats
 
-Rules live in a JSON config file (default `configs/rules.json`) and are
-hot-reloaded either on a 5-second poll or immediately on `SIGHUP`. Each
-rule has:
+K-Guard supports both **YAML** and **JSON** configuration files (auto-detected via file extension or structural fallback). Configs are reloaded via `SIGHUP` or a 5-second poll loop.
 
-- `match`: `exact_path`, `basename`, `prefix`, `substring`, or `sha256`
-- `pattern`: what to compare against
-- `severity`: `low` / `medium` / `high` / `critical`
-- `action`: `ALERT` (log only), `KILL` (SIGKILL the PID), or `BLOCK`
-  (synced to the in-kernel LSM block-list when `match` is `exact_path`;
-  otherwise falls back to `KILL` post-exec)
-- `suspicious_path_only` (optional): only evaluate the rule if the exec
-  path matches one of the configured `suspicious_paths`
+Configuration files are unmarshaled directly into standard Go structs, and CEL ASTs are pre-compiled and initialized once (`sync.Once`) upfront to keep the engine format-agnostic and ultra-fast during runtime evaluation.
 
-An `allowlist` of exact paths/basenames is checked first and skips rule
-evaluation entirely. `protected_pids` / `protected_comms`, plus PID 1 and
-K-Guard's own PID, can never be killed regardless of what matches.
+### Rule Structure
 
-Example config:
+Rules are evaluated using Common Expression Language (CEL), providing flexibility when inspecting event fields (`process.path`, `process.basename`, `process.sha256`, `event.is_suspicious_path`, etc.):
+
+* **`name`**: Friendly name for the rule.
+* **`severity`**: `low` \| `medium` \| `high` \| `critical`.
+* **`action`**: 
+  * `ALERT`: Generate alert only.
+  * `KILL`: Terminate process post-exec via `pidfd_send_signal`.
+  * `BLOCK`: Sync exact path to in-kernel LSM map for pre-exec block (falls back to `KILL` if path isn't explicit).
+* **`expression`**: CEL expression evaluated against the event context.
+
+### Example Configurations
+
+```yaml
+rules:
+  - name: "block-netcat"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.basename == 'nc'"
+
+  - name: "tmp-exec"
+    severity: "high"
+    action: "KILL"
+    expression: "process.path.startsWith('/tmp/') && event.is_suspicious_path"
+
+  - name: "known-malware-hash"
+    severity: "critical"
+    action: "KILL"
+    expression: "process.sha256 == '<hex digest>'"
+
+enforcement_enabled: true
+dedup_window_seconds: 10
+
+allowlist:
+  - "/usr/bin/ssh"
+
+protected_comms:
+  - "/usr/sbin/sshd"
+  - "/usr/bin/systemd"
+
+suspicious_path:
+  - "/testkill/"
+  - "/tmp/"
+
+sensitive_write_paths:
+  - "/etc/"
+  - "/root/.ssh/"
+
+blocked_write_paths:
+  - "/etc/passwd"
+
+ignored_connect_comms:
+  - "/usr/bin/dockerd"
+
+ptrace_enforcement_enabled: true
+allowed_ptrace_attaches:
+  - "/usr/bin/gdb"
+  - "/usr/bin/dlv"
+
+kmod_enforcement_enabled: true
+
+proc_path: "/proc"
+cgroup_path: "/sys/fs/cgroup"
+kubelet_url: "https://127.0.0.1:10250"
+kubelet_insecure: false
+kubelet_cert_file: "/var/lib/rancher/k8s/server/tls/client-admin.crt"
+kubelet_key_file: "/var/lib/rancher/k8s/server/tls/client-admin.key"
+
+sinks:
+  stdout: true
+  syslog: true
+  webhook_url: "https://example.com/hooks/kguard"
+  store_path: "/var/lib/kguard/alerts"
+  metrics_listen_addr: ":9090"
+  dashboard_listen_addr: ":8080"
+```
+
+**JSON Support**: K-Guard auto-detects JSON files (`.json`) or JSON payloads as well. All field keys map 1:1 with the YAML structure above:
 
 ```json
+
 {
-  "rules": [
-    { "name": "block-netcat", "match": "basename", "pattern": "nc", "severity": "critical", "action": "BLOCK" },
-    { "name": "tmp-exec", "match": "prefix", "pattern": "/tmp/", "severity": "high", "action": "KILL", "suspicious_path_only": true },
-    { "name": "known-malware-hash", "match": "sha256", "pattern": "<hex digest>", "severity": "critical", "action": "KILL" }
-  ],
-
   "enforcement_enabled": true,
-  "dedup_window_seconds": 10,
-
-  "allowlist": ["/usr/bin/ssh"],
- "protected_comms": ["/usr/sbin/sshd", "/usr/bin/systemd"],
-
-  "suspicious_path": ["/testkill/", "/tmp/"],
-
-  "sensitive_write_paths": ["/etc/", "/root/.ssh/"],
-  "blocked_write_paths": ["/etc/passwd"],
-
-"ignored_connect_comms": ["/usr/bin/dockerd"],
-
-  "ptrace_enforcement_enabled": true,
-  "allowed_ptrace_attaches": ["/usr/bin/gdb", "/usr/bin/dlv"],
-
-  "kmod_enforcement_enabled": true,
-
-  "proc_path": "/proc",
-  "cgroup_path": "/sys/fs/cgroup",
-  "kubelet_url": "https://127.0.0.1:10250",
-  "kubelet_insecure": false,
-  "kubelet_cert_file": "/var/lib/rancher/k8s/server/tls/client-admin.crt",
-  "kubelet_key_file": "/var/lib/rancher/k8s/server/tls/client-admin.key",
-  
-  "sinks": {
-    "stdout": true,
-    "syslog": true,
-    "webhook_url": "https://example.com/hooks/kguard",
-    "store_path": "/var/lib/kguard/alerts",
-    "metrics_listen_addr": ":9090",
-    "dashboard_listen_addr": ":8080"
-  }
+  "rules": [
+    { "name": "Block netcat", "severity": "critical", "action": "BLOCK", "expression": "process.path == '/usr/bin/nc'" }
+  ]
 }
 ```
 
@@ -150,6 +176,11 @@ When evaluating `sha256` rules:
 K-Guard refuses to start (or reload) if the config fails validation.
 Common gotchas:
 
+- **CEL Expression Syntax Validation**: K-Guard pre-compiles and 
+  validates `CEL` syntax on startup/reload and will reject invalid 
+  expressions (e.g., syntax errors, unparseable operators, or invalid field accesses).
+- **YAML/JSON Flexibility**: Parser logic auto-detects `YAML` or `JSON` format 
+  regardless of the file extension fallback.
 - **empty strings in path/comm lists.** `suspicious_path`,
   `sensitive_write_paths`, `blocked_write_paths`, `allowlist`,
   `protected_comms`, `ignored_connect_comms`, and
