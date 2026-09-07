@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -181,6 +182,9 @@ func main() {
 	if cfg.Sinks.WebhookURL != "" {
 		dispatcher.Register(alert.NewWebhookSink(cfg.Sinks.WebhookURL))
 	}
+	if cfg.Sinks.SlackWebhookURL != "" {
+		dispatcher.Register(alert.NewSlackSink(cfg.Sinks.SlackWebhookURL))
+	}
 	var store *alert.Store
 	if cfg.Sinks.StorePath != "" {
 		store, err = alert.NewStore(cfg.Sinks.StorePath)
@@ -253,6 +257,31 @@ func main() {
 			log.Println("[main] SIGHUP received, reloading config immediately")
 			if err := cfgMgr.ReloadNow(); err != nil {
 				log.Printf("[main] SIGHUP reload failed, keeping previous config: %v", err)
+			}
+		}
+	}()
+
+	// Background Memory Safety Valve Goroutine
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopWatch:
+				return
+			case <-ticker.C:
+				currentCfg := cfgMgr.Current()
+				if currentCfg.MaxMemoryMB == 0 {
+					continue
+				}
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				maxBytes := currentCfg.MaxMemoryMB * 1024 * 1024
+				if m.Alloc > maxBytes {
+					log.Printf("[SAFETY-VALVE] WARNING: Memory usage (%d MB) exceeded max threshold (%d MB). Triggering GC...",
+						m.Alloc/(1024*1024), currentCfg.MaxMemoryMB)
+					runtime.GC()
+				}
 			}
 		}
 	}()

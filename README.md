@@ -120,6 +120,7 @@ ignored_connect_comms:
   - "/usr/bin/dockerd"
 
 ptrace_enforcement_enabled: true
+max_memory_mb: 256
 allowed_ptrace_attaches:
   - "/usr/bin/gdb"
   - "/usr/bin/dlv"
@@ -137,6 +138,7 @@ sinks:
   stdout: true
   syslog: true
   webhook_url: "https://example.com/hooks/kguard"
+  slack_webhook_url: "https://hooks.slack.com/services/..."
   store_path: "/var/lib/kguard/alerts"
   metrics_listen_addr: ":9090"
   dashboard_listen_addr: ":8080"
@@ -302,6 +304,7 @@ cache is warm before the first eBPF events arrive.
 - **stdout** : human-readable, multi-line per alert. Promotes lineage-flagged events, and renders visual (`Process Lineage Trace`) showing root ancestors and parent chains.
 - **syslog** : JSON body, severity mapped to a syslog level
 - **webhook** : POSTs `{ "text": <summary>, "alert": <Alert> }` as JSON
+- **slack** : POSTs clean, formatted Markdown alert messages directly to Slack or Discord webhooks (`sinks.slack_webhook_url`)
 - **store** : append-only, date-rotated JSON-Lines files; backs the
   dashboard and its `/api/alerts` JSON endpoint
 - **metrics** : Prometheus text exposition at `/metrics`
@@ -359,6 +362,11 @@ K-Guard guarantees both self-preservation and protection against accidental coll
 Kills go through `pidfd_open` + `pidfd_send_signal` rather than a raw
 `kill()` by PID, so a PID that has already exited and been recycled by
 the kernel for an unrelated process can't be killed by mistake.
+
+## Memory Safety 
+
+To prevent memory bloat or memory leaks under heavy syscall load on high-throughput nodes:
+- **Max RSS Memory Valve (`max_memory_mb`)**: Monitors K-Guard's runtime memory allocation every 10 seconds. If memory allocation exceeds the configured threshold (`max_memory_mb`), K-Guard automatically triggers an immediate Garbage Collection (`runtime.GC()`) to reclaim memory and stabilize RSS footprint.
 
 ## Testing & Troubleshooting
 

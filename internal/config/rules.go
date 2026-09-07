@@ -115,6 +115,7 @@ type SinksConfig struct {
 	Stdout              bool   `yaml:"stdout" json:"stdout"`
 	Syslog              bool   `yaml:"syslog" json:"syslog"`
 	WebhookURL          string `yaml:"webhook_url,omitempty" json:"webhook_url,omitempty"`
+	SlackWebhookURL     string `yaml:"slack_webhook_url,omitempty" json:"slack_webhook_url,omitempty"`
 	StorePath           string `yaml:"store_path,omitempty" json:"store_path,omitempty"`
 	MetricsListenAddr   string `yaml:"metrics_listen_addr,omitempty" json:"metrics_listen_addr,omitempty"`
 	DashboardListenAddr string `yaml:"dashboard_listen_addr,omitempty" json:"dashboard_listen_addr,omitempty"`
@@ -129,6 +130,7 @@ type Config struct {
 	ProtectedPIDs            []int       `yaml:"protected_pids,omitempty" json:"protected_pids,omitempty"`
 	ProtectedComms           []string    `yaml:"protected_comms,omitempty" json:"protected_comms,omitempty"`
 	EnforcementEnabled       bool        `yaml:"enforcement_enabled" json:"enforcement_enabled"`
+	MaxMemoryMB              uint64      `yaml:"max_memory_mb,omitempty" json:"max_memory_mb,omitempty"`
 	DedupWindowSeconds       int         `yaml:"dedup_window_seconds" json:"dedup_window_seconds"`
 	Sinks                    SinksConfig `yaml:"sinks" json:"sinks"`
 	SuspiciousPaths          []string    `yaml:"suspicious_path,omitempty" json:"suspicious_path,omitempty"`

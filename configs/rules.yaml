@@ -71,6 +71,7 @@ allowed_ptrace_attaches:
 
 kmod_enforcement_enabled: false
 enforcement_enabled: true
+max_memory_mb: 256
 dedup_window_seconds: 10
 
 sinks:

@@ -9,6 +9,9 @@ func diffConfig(old, new *Config) []string {
 	if old.EnforcementEnabled != new.EnforcementEnabled {
 		changes = append(changes, fmt.Sprintf("enforcement_enabled: %v -> %v", old.EnforcementEnabled, new.EnforcementEnabled))
 	}
+	if old.MaxMemoryMB != new.MaxMemoryMB {
+		changes = append(changes, fmt.Sprintf("max_memory_mb: %d -> %d", old.MaxMemoryMB, new.MaxMemoryMB))
+	}
 	if old.PtraceEnforcementEnabled != new.PtraceEnforcementEnabled {
 		changes = append(changes, fmt.Sprintf("ptrace_enforcement_enabled: %v -> %v", old.PtraceEnforcementEnabled, new.PtraceEnforcementEnabled))
 	}
@@ -104,6 +107,9 @@ func diffSinks(old, new SinksConfig) []string {
 	}
 	if old.WebhookURL != new.WebhookURL {
 		changes = append(changes, "sinks.webhook_url changed")
+	}
+	if old.SlackWebhookURL != new.SlackWebhookURL {
+		changes = append(changes, "sinks.slack_webhook_url changed")
 	}
 	if old.StorePath != new.StorePath {
 		changes = append(changes, fmt.Sprintf("sinks.store_path: %q -> %q", old.StorePath, new.StorePath))
