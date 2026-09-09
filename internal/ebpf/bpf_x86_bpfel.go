@@ -95,6 +95,12 @@ type BPFOpenEvent struct {
 	_             [6]byte
 }
 
+type BPFPmuEvent struct {
+	_            structs.HostLayout
+	Hdr          BPFEventHdr
+	MispredCount uint64
+}
+
 type BPFProcessLineage struct {
 	_                  structs.HostLayout
 	ParentPid          uint32
@@ -143,6 +149,7 @@ const (
 	BPFProgLsmFileOpen             = "lsm_file_open"
 	BPFProgLsmPtraceAccessCheck    = "lsm_ptrace_access_check"
 	BPFProgLsmTaskKill             = "lsm_task_kill"
+	BPFProgOnBranchMispredict      = "on_branch_mispredict"
 	BPFProgTpConnect               = "tp_connect"
 	BPFProgTpExecve                = "tp_execve"
 	BPFProgTpInitModule            = "tp_init_module"
@@ -165,6 +172,7 @@ const (
 	BPFVarUnusedKmodEvent          = "unused_kmod_event"
 	BPFVarUnusedLpeEvent           = "unused_lpe_event"
 	BPFVarUnusedOpenEvent          = "unused_open_event"
+	BPFVarUnusedPmuEvent           = "unused_pmu_event"
 	BPFVarUnusedPtraceEvent        = "unused_ptrace_event"
 )
 
@@ -218,6 +226,7 @@ type BPFProgramSpecs struct {
 	LsmFileOpen          *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
 	LsmPtraceAccessCheck *ebpf.ProgramSpec `ebpf:"lsm_ptrace_access_check"`
 	LsmTaskKill          *ebpf.ProgramSpec `ebpf:"lsm_task_kill"`
+	OnBranchMispredict   *ebpf.ProgramSpec `ebpf:"on_branch_mispredict"`
 	TpConnect            *ebpf.ProgramSpec `ebpf:"tp_connect"`
 	TpExecve             *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.ProgramSpec `ebpf:"tp_init_module"`
@@ -262,6 +271,7 @@ type BPFVariableSpecs struct {
 	UnusedKmodEvent          *ebpf.VariableSpec `ebpf:"unused_kmod_event"`
 	UnusedLpeEvent           *ebpf.VariableSpec `ebpf:"unused_lpe_event"`
 	UnusedOpenEvent          *ebpf.VariableSpec `ebpf:"unused_open_event"`
+	UnusedPmuEvent           *ebpf.VariableSpec `ebpf:"unused_pmu_event"`
 	UnusedPtraceEvent        *ebpf.VariableSpec `ebpf:"unused_ptrace_event"`
 }
 
@@ -327,6 +337,7 @@ type BPFVariables struct {
 	UnusedKmodEvent          *ebpf.Variable `ebpf:"unused_kmod_event"`
 	UnusedLpeEvent           *ebpf.Variable `ebpf:"unused_lpe_event"`
 	UnusedOpenEvent          *ebpf.Variable `ebpf:"unused_open_event"`
+	UnusedPmuEvent           *ebpf.Variable `ebpf:"unused_pmu_event"`
 	UnusedPtraceEvent        *ebpf.Variable `ebpf:"unused_ptrace_event"`
 }
 
@@ -342,6 +353,7 @@ type BPFPrograms struct {
 	LsmFileOpen          *ebpf.Program `ebpf:"lsm_file_open"`
 	LsmPtraceAccessCheck *ebpf.Program `ebpf:"lsm_ptrace_access_check"`
 	LsmTaskKill          *ebpf.Program `ebpf:"lsm_task_kill"`
+	OnBranchMispredict   *ebpf.Program `ebpf:"on_branch_mispredict"`
 	TpConnect            *ebpf.Program `ebpf:"tp_connect"`
 	TpExecve             *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.Program `ebpf:"tp_init_module"`
@@ -365,6 +377,7 @@ func (p *BPFPrograms) Close() error {
 		p.LsmFileOpen,
 		p.LsmPtraceAccessCheck,
 		p.LsmTaskKill,
+		p.OnBranchMispredict,
 		p.TpConnect,
 		p.TpExecve,
 		p.TpInitModule,

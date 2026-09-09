@@ -465,6 +465,26 @@ func (e *Engine) AnalyzeLpeBlocked(comm string, pid, ppid, uid, gid uint32, cgro
 	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
+func (e *Engine) AnalyzePmu(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, mispredCount uint64, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow("pmu_mispredict|" + strconv.Itoa(int(pid))) {
+		return
+	}
+
+	detail := fmt.Sprintf("PMU branch misprediction spike: count=%d", mispredCount)
+	sev := config.SeverityMedium
+	if ancestorSuspicious {
+		sev = config.SeverityCritical
+	}
+
+	a := alert.Alert{
+		Severity: string(sev), Action: string(config.ActionAlert),
+		EventType: "BRANCH_MISPREDICT", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
+		Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
 // enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
 // at the next refactor this function will do the work of enriching all alerts not only the k8s context
 func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {

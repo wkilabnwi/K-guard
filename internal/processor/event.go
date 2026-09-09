@@ -254,6 +254,18 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			ancestorSuspicious,
 			ancestorFilename,
 		)
+
+	case kebpf.EventBranchMispredict:
+		var evt kebpf.BPFPmuEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		r.engine.AnalyzePmu(
+			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
+			hdr.CgroupId, evt.MispredCount, ancestorSuspicious, ancestorFilename,
+		)
 	}
 
 }

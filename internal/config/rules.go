@@ -54,6 +54,7 @@ type EventContext struct {
 	AncestorSuspicious bool           `cel:"ancestor_suspicious"`
 	AncestorFilename   string         `cel:"ancestor_filename"`
 	IsSuspiciousPath   bool           `cel:"is_suspicious_path"`
+	MispredCount       uint64         `cel:"mispred_count"`
 	Process            ProcessContext `cel:"process"`
 }
 

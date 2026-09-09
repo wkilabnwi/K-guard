@@ -31,6 +31,46 @@ it, a BPF LSM hook:
 | `IO_URING` | `tracepoint/io_uring/io_uring_submit_req` | Monitored asynchronous file ops (`IORING_OP_OPENAT`, `OPENAT2`, `CONNECT`) |
 | `TASK_KILL_BLOCKED` | `lsm/task_kill` | Self-protection: pre-emptively blocks external processes from sending termination signals to K-Guard |
 | `BPF_CMD_BLOCKED` | `lsm/bpf` | Self-protection: blocks unauthorized processes from inspecting or detaching K-Guard eBPF maps/programs |
+| `BRANCH_MISPREDICT` | `perf_event` (`PERF_TYPE_HARDWARE`, `PERF_COUNT_HW_BRANCH_MISSES`) | Hardware PMU counter, not a syscall/LSM hook. One `perf_event` per possible CPU, sampled every 10k mispredicted branches.|
+
+### Hardware PMU sensor (branch mispredictions)
+ 
+Unlike every other sensor in the table above, this one doesn't hook a
+syscall or LSM callback, it opens a `PERF_TYPE_HARDWARE` counter
+(`perf_event_open`) on every possible CPU (`ebpf.PossibleCPU()`, not
+`runtime.NumCPU()`, so a cpuset/static-CPU-manager pod still gets full
+node coverage rather than just the CPUs it happens to be scheduled on)
+and binds the `on_branch_mispredict` program to each one via
+`PERF_EVENT_IOC_SET_BPF` + `PERF_EVENT_IOC_ENABLE`.
+ 
+That means it depends on hardware the other sensors don't: a real PMU
+device exposed by the kernel. Many virtualized environments don't pass
+one through to the guest, this includes **hypervisor-backed dev VMs on
+macOS** (colima, whether backed by `vz` or `qemu`/HVF) and **some cloud
+instance types** (AWS Nitro in particular is known to withhold PMU
+access from guests for isolation reasons). On those hosts,
+`perf_event_open` fails with `ENOENT` for every CPU, regardless of
+config.
+ 
+K-Guard checks for this up front (`hasHardwarePMU()`, looking for a
+`cpu`/`cpu_core`/`cpu_atom` entry under
+`/sys/bus/event_source/devices`) rather than attempting and failing per
+CPU, and skips the sensor with a single clear log line if none is
+found. You can check any host in advance the same way:
+ 
+```bash
+ls /sys/bus/event_source/devices/
+```
+ 
+If `cpu` (or `cpu_core`/`cpu_atom` on hybrid Intel) isn't listed, this
+sensor will not attach on that host, and `pmu_branch_mispredict` won't
+appear in the active-sensor list or `/healthz`. Every other sensor is
+unaffected either way. The sysfs-detection logic itself has unit test
+coverage (`internal/ebpf/loader_pmu_test.go`) that doesn't require real
+PMU hardware to run; the attach path itself does, and should be
+verified on real (ideally bare-metal, or a cloud VPS that confirms a
+`cpu` entry) hardware before being relied on for detection coverage in
+a given deployment.
 
 ### Two operating modes
 
@@ -371,6 +411,8 @@ To prevent memory bloat or memory leaks under heavy syscall load on high-through
 ## Testing & Troubleshooting
 
 **Testing LSM Hooks Note** : When testing security hooks like `PTRACE`, keep kernel credential checks (`__ptrace_may_access`) in mind. Non-root users targeting root processes (like PID 1) will be rejected by the kernel with `-EPERM` before reaching the eBPF LSM layer. To test eBPF-level dropping and event emission correctly, run tests with appropriate capabilities/root or target processes owned by the same user.
+
+**Testing the PMU sensor Note** : The `BRANCH_MISPREDICT` sensor can't be exercised end-to-end on most local dev VMs (see above) : `ls /sys/bus/event_source/devices/` for a `cpu*` entry before assuming it's working, and check the startup log for `PMU branch-mispredict sensor` either way. A no-PMU host is expected in plenty of environments, not a bug on its own so the rest of K-Guard runs unaffected.
 
 ## Running
 

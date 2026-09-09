@@ -21,6 +21,7 @@
 #include "sensors/sys.h"
 #include "sensors/iouring.h"
 #include "sensors/selfprotect.h"
+#include "sensors/pmu.h"
 
 
 char _license[] SEC("license") = "GPL";

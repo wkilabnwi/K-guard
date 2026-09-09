@@ -5,6 +5,10 @@ import (
 	"k-guard/internal/trust"
 	"log"
 	"os"
+	"runtime"
+	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -12,7 +16,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -20,6 +24,8 @@ type Manager struct {
 	links []link.Link
 
 	LSMEnabled bool
+
+	perfEventFds []int
 
 	activeSensors []string
 
@@ -177,6 +183,55 @@ func NewManager() (*Manager, error) {
 		}
 	}
 
+	if m.Objects.OnBranchMispredict != nil && !hasHardwarePMU() {
+		log.Println("[ebpf] PMU branch-mispredict sensor skipped: no hardware PMU device present no /sys/bus/event_source/devices/cpu*), common under virtualization/colima/cloud VMs that don't expose a vPMU to the guest kernel. Detect-only for this sensor.")
+	} else if m.Objects.OnBranchMispredict != nil {
+		// Configure perf event attribute for Branch Mispredictions
+		attr := &unix.PerfEventAttr{
+			Type:   unix.PERF_TYPE_HARDWARE,
+			Config: unix.PERF_COUNT_HW_BRANCH_MISSES,
+			Sample: 10000,
+			Bits:   unix.PerfBitDisabled | unix.PerfBitExcludeHv,
+		}
+
+		numCPU, cerr := ebpf.PossibleCPU()
+		if cerr != nil {
+			log.Printf("[ebpf] WARNING: could not determine possible CPU count (%v), falling back to runtime.NumCPU() - some CPUs may go unmonitored", cerr)
+			numCPU = runtime.NumCPU()
+		}
+
+		attached := 0
+		for cpu := 0; cpu < numCPU; cpu++ {
+			fd, err := unix.PerfEventOpen(attr, -1, cpu, -1, 0)
+			if err != nil {
+
+				log.Printf("[ebpf] WARNING: failed to open perf event on CPU %d: %v", cpu, err)
+				continue
+			}
+
+			if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_SET_BPF, m.Objects.OnBranchMispredict.FD()); err != nil {
+				log.Printf("[ebpf] WARNING: failed to bind PMU sensor program on CPU %d: %v", cpu, err)
+				unix.Close(fd)
+				continue
+			}
+			if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_ENABLE, 0); err != nil {
+				log.Printf("[ebpf] WARNING: failed to enable PMU sensor on CPU %d: %v", cpu, err)
+				unix.Close(fd)
+				continue
+			}
+
+			m.perfEventFds = append(m.perfEventFds, fd)
+			attached++
+		}
+
+		if attached > 0 {
+			m.activeSensors = append(m.activeSensors, "pmu_branch_mispredict")
+			log.Printf("[ebpf] PMU branch-mispredict sensor attached on %d/%d CPUs", attached, numCPU)
+		} else {
+			log.Printf("[ebpf] WARNING: PMU branch-mispredict sensor failed to attach on any CPU, sensor disabled")
+		}
+	}
+
 	// Attach LSM Task Fix Setuid Hook
 	if m.Objects.KguardTaskFixSetuid != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardTaskFixSetuid})
@@ -218,6 +273,22 @@ func (m *Manager) ActiveSensors() []string {
 	out := make([]string, len(m.activeSensors))
 	copy(out, m.activeSensors)
 	return out
+}
+
+func hasHardwarePMU() bool {
+	entries, err := os.ReadDir("/sys/bus/event_source/devices")
+	if err != nil {
+		// can't tell either way so we just skip it
+		return true
+	}
+	for _, e := range entries {
+		name := e.Name()
+
+		if name == "cpu" || strings.HasPrefix(name, "cpu_") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) SetEnforcement(enabled bool) error {

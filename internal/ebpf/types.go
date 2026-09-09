@@ -4,20 +4,21 @@ package ebpf
 type EventType uint32
 
 const (
-	EventExec           EventType = 1  // process executed (observed after the fact, tracepoint)
-	EventExecBlocked    EventType = 2  // exec blocked pre-flight by the LSM hook
-	EventConnect        EventType = 3  // outbound connect()
-	EventOpenSensitive  EventType = 4  // openat(),openat2() on a sensitive path
-	EventPtrace         EventType = 5  // ptrace() attach/injection attempt
-	EventSetuid         EventType = 6  // setuid()/privilege change
-	EventModuleLoad     EventType = 7  // init_module()/finit_module()
-	EventMemfd          EventType = 8  // memfd_create(), fileless-exec precursor
-	EventSensitiveWrite EventType = 9  // open() with write on a protected  path
-	EventWriteBlocked   EventType = 10 // for blocked write events
-	EventPtraceBlocked  EventType = 11 // for blocked ptrace events
-	EventKmodBlocked    EventType = 12 // for blocked kmod events
-	EventIoUring        EventType = 13 // iouring events
-	EventLpeBlocked     EventType = 14
+	EventExec             EventType = 1  // process executed (observed after the fact, tracepoint)
+	EventExecBlocked      EventType = 2  // exec blocked pre-flight by the LSM hook
+	EventConnect          EventType = 3  // outbound connect()
+	EventOpenSensitive    EventType = 4  // openat(),openat2() on a sensitive path
+	EventPtrace           EventType = 5  // ptrace() attach/injection attempt
+	EventSetuid           EventType = 6  // setuid()/privilege change
+	EventModuleLoad       EventType = 7  // init_module()/finit_module()
+	EventMemfd            EventType = 8  // memfd_create(), fileless-exec precursor
+	EventSensitiveWrite   EventType = 9  // open() with write on a protected  path
+	EventWriteBlocked     EventType = 10 // for blocked write events
+	EventPtraceBlocked    EventType = 11 // for blocked ptrace events
+	EventKmodBlocked      EventType = 12 // for blocked kmod events
+	EventIoUring          EventType = 13 // iouring events
+	EventLpeBlocked       EventType = 14
+	EventBranchMispredict EventType = 15
 )
 
 func (t EventType) String() string {
@@ -50,6 +51,8 @@ func (t EventType) String() string {
 		return "IOURING"
 	case EventLpeBlocked:
 		return "LPE_BLOCKED"
+	case EventBranchMispredict:
+		return "BRANCH_MISPREDICT"
 	default:
 		return "UNKNOWN"
 	}

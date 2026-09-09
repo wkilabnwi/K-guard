@@ -19,6 +19,11 @@ rules:
     action: "BLOCK"
     expression: "process.path == '/usr/local/bin/xmrig'"
 
+  - name: "PMU Branch Misprediction Anomaly"
+    severity: "high"
+    action: "ALERT"
+    expression: 'event.type == "BRANCH_MISPREDICT" && event.mispred_count > 10000'
+
   - name: "Crypto miner (xmrig) : tmp path hard block"
     severity: "critical"
     action: "BLOCK"
