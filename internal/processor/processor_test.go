@@ -3,8 +3,10 @@ package processor
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,15 +64,13 @@ func setupTestEngine(t *testing.T) (*Engine, *MockSink, *config.Manager) {
   "rules": [
     {
       "name": "detect-nc",
-      "match": "basename",
-      "pattern": "nc",
+      "expression": "process.basename == 'nc'",
       "severity": "high",
       "action": "ALERT"
     },
     {
       "name": "kill-malware",
-      "match": "exact_path",
-      "pattern": "/tmp/malware",
+      "expression": "process.path == '/tmp/malware'",
       "severity": "critical",
       "action": "KILL"
     }
@@ -259,4 +259,443 @@ func waitForAlerts(sink *MockSink, count int) []alert.Alert {
 		time.Sleep(2 * time.Millisecond)
 	}
 	return sink.Alerts()
+}
+
+func TestIsSuspiciousPath(t *testing.T) {
+	paths := []string{"/tmp", "/var/tmp", "/dev/shm"}
+	if !isSuspiciousPath("/tmp/evil.sh", paths) {
+		t.Errorf("expected /tmp/evil.sh to be marked suspicious")
+	}
+	if isSuspiciousPath("/usr/bin/ls", paths) {
+		t.Errorf("expected /usr/bin/ls to NOT be marked suspicious")
+	}
+}
+
+func TestExecHash_GetSelf(t *testing.T) {
+	h := &execHash{pid: uint32(os.Getpid())}
+	hexVal, err := h.get()
+	if err != nil {
+		t.Fatalf("expected hash for current process, got err: %v", err)
+	}
+	if len(hexVal) != 64 {
+		t.Errorf("expected 64-char sha256 hex string, got %s", hexVal)
+	}
+
+	// Verify caching path
+	cachedHex, err := h.get()
+	if err != nil || cachedHex != hexVal {
+		t.Errorf("expected cached hash match")
+	}
+}
+
+func TestEngine_GenericAnalyzers(t *testing.T) {
+	eng, sink, _ := setupTestEngine(t)
+
+	eng.AnalyzeConnect(1001, 1, 1000, 1000, "curl", 1, "1.1.1.1", 443, true, "/tmp/bad")
+	eng.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, 1002, 1, 1000, 1000, "malware", 1, "/tmp/m", "memfd created", false, "", false)
+	eng.AnalyzeWriteBlocked("bash", "/etc/shadow", 1003, 1, 0, 0, 1, false, "", false)
+	eng.AnalyzePtraceBlocked("gdb", "target", 1004, 0x1, 1005, 1, 0, 0, 1, false, "")
+	eng.AnalyzeKmodBlocked("insmod", 1006, 1, 0, 0, 1, true, "/tmp/rootkit")
+	eng.AnalyzeIoUring(1007, 1, 1000, 1000, "exploit", "", 1, 1, false, "")
+	eng.AnalyzeLpeBlocked("exploit", 1008, 1, 1000, 1000, 1, 1000, 0, true, "/tmp/lpe")
+	eng.AnalyzePmu(1009, 1, 1000, 1000, "spectre", 1, 5000, false, "")
+
+	alerts := waitForAlerts(sink, 8)
+	if len(alerts) < 8 {
+		t.Fatalf("expected at least 8 alerts from generic analyzers, got %d", len(alerts))
+	}
+}
+
+func TestRouter_AllEvents(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr)
+
+	makeHdr := func(et kebpf.EventType) kebpf.BPFEventHdr {
+		h := kebpf.BPFEventHdr{
+			EventType:          uint32(et),
+			Pid:                2000,
+			Ppid:               1,
+			Uid:                1000,
+			Gid:                1000,
+			CgroupId:           1,
+			AncestorSuspicious: 1,
+		}
+		copyInt8(h.Comm[:], "test")
+		copyInt8(h.AncestorFilename[:], "/tmp/ancestor")
+		return h
+	}
+
+	connEvt := kebpf.BPFConnectEvent{
+		Hdr:    makeHdr(kebpf.EventConnect),
+		Family: 2,
+		Dport:  80,
+		Daddr:  0x08080808,
+	}
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, connEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	unixEvt := kebpf.BPFConnectEvent{
+		Hdr:    makeHdr(kebpf.EventConnect),
+		Family: 1,
+	}
+	copyInt8(unixEvt.UnixPath[:], "/var/run/test.sock")
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, unixEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	openEvt := kebpf.BPFOpenEvent{
+		Hdr: makeHdr(kebpf.EventOpenSensitive),
+	}
+	copyInt8(openEvt.Filename[:], "/etc/passwd")
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, openEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	ptraceEvt := makeHdr(kebpf.EventPtrace)
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, ptraceEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	ptraceBlockedEvt := kebpf.BPFPtraceEvent{
+		Hdr:       makeHdr(kebpf.EventPtraceBlocked),
+		TargetPid: 3000,
+		Mode:      1,
+	}
+	copyInt8(ptraceBlockedEvt.TargetComm[:], "target")
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, ptraceBlockedEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	kmodEvt := kebpf.BPFKmodEvent{
+		Hdr: makeHdr(kebpf.EventKmodBlocked),
+	}
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, kmodEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	lpeEvt := kebpf.BPFLpeEvent{
+		Hdr:    makeHdr(kebpf.EventLpeBlocked),
+		OldUid: 1000,
+		NewUid: 0,
+	}
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, lpeEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	pmuEvt := kebpf.BPFPmuEvent{
+		Hdr:          makeHdr(kebpf.EventBranchMispredict),
+		MispredCount: 999,
+	}
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, pmuEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 8)
+	if len(alerts) < 8 {
+		t.Fatalf("expected at least 8 alerts from router events, got %d", len(alerts))
+	}
+}
+
+func TestResolveAbsolutePath(t *testing.T) {
+	if resolved := resolveAbsolutePath(uint32(os.Getpid()), "relative/path"); resolved == "" {
+		t.Errorf("expected non-empty resolved path")
+	}
+}
+
+func TestEngine_AnalyzeExec_BlockedAndTruncated(t *testing.T) {
+	eng, sink, _ := setupTestEngine(t)
+
+	// Blocked pre-flight exec with path truncation
+	eng.AnalyzeExec("badapp", "/tmp/badapp", 601, 1, 0, 0, 1, "-v", true, true, "/tmp/ancestor", true, false)
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for blocked exec, got %d", len(alerts))
+	}
+	if !alerts[0].Blocked || alerts[0].EventType != "EXEC_BLOCKED" || !alerts[0].PathTruncated {
+		t.Errorf("unexpected alert details for blocked exec: %+v", alerts[0])
+	}
+}
+
+func TestEngine_AnalyzeExec_SeverityEscalationAndKillAction(t *testing.T) {
+	eng, sink, _ := setupTestEngine(t)
+
+	// Trigger rule 'kill-malware' which action is KILL
+	eng.AnalyzeExec("malware", "/tmp/malware", 602, 1, 0, 0, 1, "", false, false, "", true, false)
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for kill action, got %d", len(alerts))
+	}
+	if alerts[0].Action != string(config.ActionKill) || !alerts[0].PathTruncated {
+		t.Errorf("unexpected alert details: %+v", alerts[0])
+	}
+}
+
+func TestEngine_ApplyConfig_NilManager(t *testing.T) {
+	eng, _, _ := setupTestEngine(t)
+	// Passing a config with ebpfMgr == nil should return cleanly without panicking
+	eng.applyConfig(&config.Config{
+		DedupWindowSeconds: 10,
+		ProtectedPIDs:      []int{1},
+		ProtectedComms:     []string{"systemd"},
+	})
+}
+
+func TestRouter_OpenEventsAndEdgeCases(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr)
+
+	makeHdr := func(et kebpf.EventType) kebpf.BPFEventHdr {
+		h := kebpf.BPFEventHdr{
+			EventType:          uint32(et),
+			Pid:                3000,
+			Ppid:               1,
+			Uid:                1000,
+			Gid:                1000,
+			CgroupId:           1,
+			AncestorSuspicious: 0,
+		}
+		copyInt8(h.Comm[:], "tester")
+		return h
+	}
+
+	memfdEvt := kebpf.BPFOpenEvent{Hdr: makeHdr(kebpf.EventMemfd)}
+	copyInt8(memfdEvt.Filename[:], "memfd:test")
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, memfdEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	writeEvt := kebpf.BPFOpenEvent{Hdr: makeHdr(kebpf.EventSensitiveWrite)}
+	copyInt8(writeEvt.Filename[:], "/etc/shadow")
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, writeEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	setuidHdr := makeHdr(kebpf.EventSetuid)
+	setuidHdr.Ret = 0
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, setuidHdr)
+	router.ProcessRawRecord(buf.Bytes())
+
+	modHdr := makeHdr(kebpf.EventModuleLoad)
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, modHdr)
+	router.ProcessRawRecord(buf.Bytes())
+
+	wbEvt := kebpf.BPFOpenEvent{Hdr: makeHdr(kebpf.EventWriteBlocked)}
+	copyInt8(wbEvt.Filename[:], "/etc/passwd")
+	buf.Reset()
+	binary.Write(buf, binary.LittleEndian, wbEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 5)
+	if len(alerts) < 5 {
+		t.Fatalf("expected at least 5 alerts from additional router events, got %d", len(alerts))
+	}
+}
+
+func TestRouter_MalformedRecord(t *testing.T) {
+	eng, _, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr)
+
+	// Short byte array to trigger binary read error
+	router.ProcessRawRecord([]byte{0x01, 0x02})
+}
+
+func TestMatchesSHA256(t *testing.T) {
+	h := &execHash{pid: uint32(os.Getpid())}
+	actualHash, err := h.get()
+	if err != nil {
+		t.Fatalf("failed to get hash: %v", err)
+	}
+
+	match, err := matchesSHA256(h, actualHash)
+	if err != nil || !match {
+		t.Errorf("expected hash match to return true")
+	}
+
+	mismatch, err := matchesSHA256(h, "0000000000000000000000000000000000000000000000000000000000000000")
+	if err != nil || mismatch {
+		t.Errorf("expected hash mismatch to return false")
+	}
+}
+
+func TestDeduper_Cleanup(t *testing.T) {
+	d := NewDeduper(10 * time.Millisecond)
+
+	// Populate entries
+	for i := 0; i < 2050; i++ {
+		d.Allow("key-" + string(rune(i)))
+	}
+
+	time.Sleep(15 * time.Millisecond)
+
+	// Trigger map cleanup loop
+	d.Allow("trigger-cleanup")
+}
+
+func TestIsIgnoredComm(t *testing.T) {
+	comms := []string{"systemd", "dockerd"}
+	if !isIgnoredComm(comms, "dockerd") {
+		t.Errorf("expected dockerd to be ignored")
+	}
+	if isIgnoredComm(comms, "bash") {
+		t.Errorf("expected bash not to be ignored")
+	}
+}
+
+func TestRouter_IPv6Connect(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr)
+
+	makeHdr := func(et kebpf.EventType) kebpf.BPFEventHdr {
+		return kebpf.BPFEventHdr{
+			EventType: uint32(et),
+			Pid:       4000,
+			Ppid:      1,
+			Uid:       1000,
+			Gid:       1000,
+			CgroupId:  1,
+		}
+	}
+
+	// AF_INET6 Event (Family = 10)
+	v6Evt := kebpf.BPFConnectEvent{
+		Hdr:    makeHdr(kebpf.EventConnect),
+		Family: 10,
+		Dport:  443,
+	}
+	// 2001:db8::1
+	v6Evt.Daddr6[0] = 0x20
+	v6Evt.Daddr6[1] = 0x01
+	v6Evt.Daddr6[2] = 0x0d
+	v6Evt.Daddr6[3] = 0xb8
+	v6Evt.Daddr6[15] = 0x01
+
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, v6Evt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) < 1 {
+		t.Fatalf("expected 1 alert for IPv6 connect, got %d", len(alerts))
+	}
+	if alerts[0].DestIP != "[2001:db8::1]" {
+		t.Errorf("expected parsed IPv6 string, got %s", alerts[0].DestIP)
+	}
+}
+
+func TestRouter_UnknownAddressFamily(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr)
+
+	unknownEvt := kebpf.BPFConnectEvent{
+		Hdr: kebpf.BPFEventHdr{
+			EventType: uint32(kebpf.EventConnect),
+			Pid:       4001,
+		},
+		Family: 99, // Unknown family
+	}
+
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, unknownEvt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) < 1 {
+		t.Fatalf("expected 1 alert for unknown family connect, got %d", len(alerts))
+	}
+}
+
+func TestExecHash_NonExistentPID(t *testing.T) {
+	// PID 999999999 should fail symlink/stat lookup cleanly
+	h := &execHash{pid: 999999999}
+	_, err := h.get()
+	if err == nil {
+		t.Errorf("expected error fetching hash for invalid PID")
+	}
+
+	// Verify error state caching
+	_, cachedErr := h.get()
+	if cachedErr == nil {
+		t.Errorf("expected cached error on subsequent calls")
+	}
+}
+
+func TestCorrelator_EmptyTree(t *testing.T) {
+	c := NewCorrelator(5 * time.Second)
+	// Query PID that was never recorded
+	tree := c.BuildTree(9999)
+	if len(tree) != 0 {
+		t.Errorf("expected empty tree for unrecorded PID")
+	}
+
+	formatted := c.FormatTree(9999)
+	if formatted != "" {
+		t.Errorf("expected empty string for unrecorded tree")
+	}
+}
+
+func TestFormatTree_FallbackToComm(t *testing.T) {
+	c := NewCorrelator(5 * time.Second)
+	// Node without Filename forces the name = n.Comm fallback branch
+	c.cache.Add(10, ProcessNode{Pid: 10, Ppid: 1, Comm: "fallback-comm", Filename: ""})
+
+	formatted := c.FormatTree(10)
+	if !strings.Contains(formatted, "fallback-comm") {
+		t.Errorf("expected tree output to contain fallback comm name, got: %s", formatted)
+	}
+}
+
+func TestRouter_PtraceBlocked_EmptyTargetComm(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr)
+
+	hdr := kebpf.BPFEventHdr{
+		EventType: uint32(kebpf.EventPtraceBlocked),
+		Pid:       5000,
+	}
+	// Omit TargetComm to trigger the targetComm == "" -> "UNKNOWN" branch
+	evt := kebpf.BPFPtraceEvent{Hdr: hdr, TargetPid: 5001, Mode: 2}
+
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, evt)
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) < 1 || !strings.Contains(alerts[0].Detail, "UNKNOWN") {
+		t.Errorf("expected UNKNOWN fallback target comm in detail")
+	}
+}
+
+func TestGlobalHashCache_Eviction(t *testing.T) {
+	// Fill globalHashCache past its 1000 capacity to hit LRU eviction logic
+	for i := 0; i < 1005; i++ {
+		globalHashCache.Add(fmt.Sprintf("/fake/path/%d", i), cachedHash{hex: "abc"})
+	}
+}
+
+func TestDeduper_ZeroWindow(t *testing.T) {
+	d := NewDeduper(0)
+	// Window <= 0 forces direct return true branch
+	if !d.Allow("any_key") || !d.Allow("any_key") {
+		t.Errorf("deduper with 0 window should always allow")
+	}
+}
+
+func TestResolveAbsolutePath_EmptyAndAbs(t *testing.T) {
+	if res := resolveAbsolutePath(1, ""); res != "" {
+		t.Errorf("expected empty string")
+	}
+	if res := resolveAbsolutePath(1, "/usr/bin/ls"); res != "/usr/bin/ls" {
+		t.Errorf("expected absolute path return")
+	}
 }
