@@ -6,7 +6,6 @@
 
 SEC("tracepoint/io_uring/io_uring_submit_req")
 int tp_io_uring_submit_req(struct trace_event_raw_io_uring_submit_req *ctx) {
-    bpf_printk("kguard_debug: tp_io_uring_submit_req HIT! opcode=%d\n", ctx->opcode);
 
     __u8 opcode = ctx->opcode;
     if (opcode == 18 || opcode == 16 || opcode == 28) {

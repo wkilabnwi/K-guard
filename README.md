@@ -14,7 +14,7 @@ it, a BPF LSM hook:
 
 | Event | Hook | Notes |
 |---|---|---|
-| `EXEC` | `tracepoint/sched/sched_process_exec` (+ `sys_enter_execve` for argv0) | Observed *after* the exec has already started |
+| `EXEC` | `tracepoint/sched/sched_process_exec` (+ `lsm/task_alloc` for lineage tracking) | Observed *after* the exec has already started |
 | `EXEC_BLOCKED` | `lsm/bprm_check_security` | Pre-exec : the kernel is stopped from ever running the binary |
 | `CONNECT` | `sys_enter_connect` | Outbound connections : IPv4, IPv6, and Unix domain sockets |
 | `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
@@ -200,7 +200,9 @@ Duplicate alerts for the same `(rule, pid)` (or `(connect, pid, dest_ip)`,
 or `(event_type, pid)` for the generic sensors) within
 `dedup_window_seconds` are suppressed after the first.
 
-Kernel Lineage & Tree Traceback : eBPF tracks context across child forks while an LRU cache walks `pid` $\rightarrow$ `ppid` entries to reconstruct the full process execution tree on alert.
+Kernel Lineage & State Tracking: eBPF tracks context across child forks via `BPF_MAP_TYPE_TASK_STORAGE` attached directly to `struct task_struct`, utilizing `bpf_get_current_task_btf()` for instant BTF pointer resolution and automatic kernel-side memory cleanup on process exit.
+
+An LRU cache in userspace maps `pid` -> `ppid` entries to reconstruct and log the visual process execution tree on alert.
 
 Outbound connects from processes whose resolved bin matches `ignored_connect_comms`
 (e.g. `["/usr/sbin/sshd"]`) are filtered before reaching the engine at all, as are

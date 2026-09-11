@@ -33,11 +33,10 @@ struct {
     __type(value, __u8);
 } sensitive_write_paths SEC(".maps");
 
-// LRU_HASH map for automatically evicted process state
 struct {
-    __uint(type, 9); // BPF_MAP_TYPE_LRU_HASH
-    __uint(max_entries, 16384);
-    __type(key, __u32);
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
     __type(value, struct process_lineage);
 } lineage_map SEC(".maps");
 

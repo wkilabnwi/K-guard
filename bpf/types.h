@@ -27,8 +27,6 @@
 
 #define PATH_BUF_SIZE 256
 
-#define MAX_ARGS 12
-
 struct event_hdr {
     __u64 timestamp_ns;
     __u32 pid;

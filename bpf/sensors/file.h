@@ -4,21 +4,8 @@
 #include "../types.h"
 #include "../helpers.h"
 
-// HELPERS
+// GLOBAL OPENAT HELPERS
 
-static __always_inline void emit_sensitive_write_event(char *path, __u8 truncated) {
-    struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) return;
-
-    fill_common(&e->hdr, EVT_BLOCKED_WRITE);
-    __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
-    e->path_truncated = truncated;
-    e->isFileless = 0;
-
-    bpf_ringbuf_submit(e, 0);
-}
-
-// Shared helper to evaluate and submit open/write security events
 static __always_inline void handle_open_checks(char *path, __u8 truncated, int flags) {
     int write_intent = (flags & O_ACCMODE_MASK) == O_WRONLY_ ||
                         (flags & O_ACCMODE_MASK) == O_RDWR_;
@@ -156,6 +143,19 @@ struct syscall_write_args {
 };
 
 
+// LSM FILE OPEN AND ITS HELPERS
+
+static __always_inline void emit_sensitive_write_event(char *path, __u8 truncated) {
+    struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return;
+
+    fill_common(&e->hdr, EVT_BLOCKED_WRITE);
+    __builtin_memcpy(e->filename, path, PATH_BUF_SIZE);
+    e->path_truncated = truncated;
+    e->isFileless = 0;
+
+    bpf_ringbuf_submit(e, 0);
+}
 
 SEC("lsm/file_open")
 int BPF_PROG(lsm_file_open, struct file *file) {

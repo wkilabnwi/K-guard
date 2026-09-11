@@ -238,7 +238,8 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 	}
 
 	for _, r := range cfg.Rules {
-		if !evaluateCEL(r, celCtx) {
+		matched := evaluateCEL(r, celCtx)
+		if !matched {
 			continue
 		}
 
@@ -492,7 +493,9 @@ func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {
 		a.Timestamp = time.Now()
 	}
 
-	if a.AncestorSuspicious && e.correlator != nil {
+	cfg := e.cfg.Current()
+
+	if a.AncestorSuspicious && !isSuspiciousPath(a.Filename, cfg.SuspiciousPaths) && e.correlator != nil {
 		a.LineageTree = e.correlator.FormatTree(a.Pid)
 	}
 

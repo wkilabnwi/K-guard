@@ -18,81 +18,7 @@
 #include "../helpers.h"
 
 
-// HELPERS
-
-static __always_inline void emit_lpe_event(__u32 old_uid, __u32 new_uid) {
-    struct lpe_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) {
-        return;
-    }
-
-    fill_common(&e->hdr, EVENT_LPE_BLOCKED);
-    e->old_uid = old_uid;
-    e->new_uid = new_uid;
-
-    bpf_ringbuf_submit(e, 0);
-}
-
-static __always_inline void emit_kmod_event(__u32 type, __u32 load_type) {
-    struct kmod_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) {
-        return;
-    }
-
-    bpf_printk("kguard: in emit kmod before fill commong, id=\n");
-
-    fill_common(&e->hdr, type);
-
-    bpf_printk("kguard: in emit kmod after fill commong, id=\n");
-    
-    // Capture the process attempting the load
-    bpf_get_current_comm(&e->hdr.comm, sizeof(e->hdr.comm));
-    e->load_type = load_type;
-
-    bpf_printk("kguard: event is being submitted now type is %lu\n", load_type);
-
-    bpf_ringbuf_submit(e, 0);
-}
-
-static __always_inline int handle_kmod_check(int id) {
-    bpf_printk("kguard: handle_kmod_check called, id=%d\n", id);
-    if (id != 2) {
-        return 0; 
-    }
-
-    __u64 cgroup_id = bpf_get_current_cgroup_id();
-    __u8 *is_container = bpf_map_lookup_elem(&container_cgroups, &cgroup_id);
-    
-    if (!is_container) {
-        return 0; 
-    }
-
-    if (!kmod_enforcement_enabled) {
-        return 0;
-    }
-
-
-    emit_kmod_event(EVENT_KMOD_BLOCKED, 2);
-
-    return -1;
-}
-
-static __always_inline void emit_ptrace_event(struct task_struct *child, unsigned int mode, const char *caller_comm, const char *target_comm) {
-    struct ptrace_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-    if (!e) {
-        return;
-    }
-
-    fill_common(&e->hdr, EVENT_PTRACE_BLOCKED);
-
-    e->target_pid = BPF_CORE_READ(child, pid);
-    e->mode = mode;
-
-    __builtin_memcpy(e->caller_comm, caller_comm, sizeof(e->caller_comm));
-    __builtin_memcpy(e->target_comm, target_comm, sizeof(e->target_comm));
-
-    bpf_ringbuf_submit(e, 0);
-}
+// LSM BPRM CHECK SEC HELPERS AND HOOK 
 
 static __always_inline void emit_exec_event(__u32 type, char *path, __u8 truncated, __u8 is_fileless) {
     struct exec_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
@@ -133,8 +59,6 @@ static __always_inline int check_fileless(struct linux_binprm *bprm, char *path,
     return 0;
 }
 
-// LSM HOOk
-
 SEC("lsm/bprm_check_security")
 int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
@@ -147,11 +71,10 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
     struct scratch_buffer *scratch = bpf_map_lookup_elem(&scratch_map, &zero);
     if (!scratch) return 0;
 
-    char *path = scratch->primary; // Offloaded to map memory
+    char *path = scratch->primary;
     __builtin_memset(path, 0, PATH_BUF_SIZE);
     __u8 truncated = 0;
 
-    // we use bpf_d_path to solve the problem of an attcker using .././/./.. in paths for example
     if (get_safe_path(&bprm->file->f_path, path, PATH_BUF_SIZE, &truncated) < 0) {
         return 0;
     }
@@ -173,8 +96,8 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
         if (inode) {
             umode_t i_mode = BPF_CORE_READ(inode, i_mode);
             
-            __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
-            struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &pid);
+            struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+            struct process_lineage *lin = bpf_task_storage_get(&lineage_map, task, 0, 0);
             
             if (lin) {
                 if (i_mode & S_ISUID) {
@@ -182,12 +105,30 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
                 } else {
                     lin->setuid_allowed = 0;
                 }
-                bpf_map_update_elem(&lineage_map, &pid, lin, BPF_EXIST);
             }
         }
     }
 
     return 0;
+}
+
+// LSM PTRACE ACCESS CHECK HELPERS AND HOOK
+
+static __always_inline void emit_ptrace_event(struct task_struct *child, unsigned int mode, const char *caller_comm, const char *target_comm) {
+    struct ptrace_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return;
+    }
+
+    fill_common(&e->hdr, EVENT_PTRACE_BLOCKED);
+
+    e->target_pid = BPF_CORE_READ(child, pid);
+    e->mode = mode;
+
+    __builtin_memcpy(e->caller_comm, caller_comm, sizeof(e->caller_comm));
+    __builtin_memcpy(e->target_comm, target_comm, sizeof(e->target_comm));
+
+    bpf_ringbuf_submit(e, 0);
 }
 
 SEC("lsm/ptrace_access_check")
@@ -219,6 +160,46 @@ int BPF_PROG(lsm_ptrace_access_check, struct task_struct *child, unsigned int mo
     return -1;
 }
 
+// KERNEL LOAD READ HELPERS AND HOOKS 
+
+static __always_inline void emit_kmod_event(__u32 type, __u32 load_type) {
+    struct kmod_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return;
+    }
+
+
+    fill_common(&e->hdr, type);
+
+    // Capture the process attempting the load
+    bpf_get_current_comm(&e->hdr.comm, sizeof(e->hdr.comm));
+    e->load_type = load_type;
+
+    bpf_ringbuf_submit(e, 0);
+}
+
+static __always_inline int handle_kmod_check(int id) {
+    if (id != 2) {
+        return 0; 
+    }
+
+    __u64 cgroup_id = bpf_get_current_cgroup_id();
+    __u8 *is_container = bpf_map_lookup_elem(&container_cgroups, &cgroup_id);
+    
+    if (!is_container) {
+        return 0; 
+    }
+
+    if (!kmod_enforcement_enabled) {
+        return 0;
+    }
+
+
+    emit_kmod_event(EVENT_KMOD_BLOCKED, 2);
+
+    return -1;
+}
+
 SEC("lsm/kernel_read_file")
 int BPF_PROG(kguard_kernel_read_file, struct file *file, enum kernel_read_file_id id, bool contents) {
     return handle_kmod_check((int)id);
@@ -229,6 +210,21 @@ int BPF_PROG(kguard_kernel_load_data, enum kernel_load_data_id id, bool contents
     return handle_kmod_check((int)id);
 }
 
+// TASK FIX SETUID HELPERS AND HOOK 
+
+static __always_inline void emit_lpe_event(__u32 old_uid, __u32 new_uid) {
+    struct lpe_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return;
+    }
+
+    fill_common(&e->hdr, EVENT_LPE_BLOCKED);
+    e->old_uid = old_uid;
+    e->new_uid = new_uid;
+
+    bpf_ringbuf_submit(e, 0);
+}
+
 SEC("lsm/task_fix_setuid")
 int BPF_PROG(kguard_task_fix_setuid, struct cred *new, const struct cred *old, int flags) {
     if (!enforcement_enabled) return 0;
@@ -236,11 +232,10 @@ int BPF_PROG(kguard_task_fix_setuid, struct cred *new, const struct cred *old, i
     __u32 old_uid = old->uid.val;
     __u32 new_uid = new->uid.val;
 
-    // Ignore transitions that don't change UIDs
     if (old_uid == new_uid) return 0;
 
-    __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
-    struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &pid);
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct process_lineage *lin = bpf_task_storage_get(&lineage_map, task, 0, 0);
 
     if (lin) {
         if (old_uid != 0 && new_uid == 0 && !lin->setuid_allowed) {
@@ -249,9 +244,32 @@ int BPF_PROG(kguard_task_fix_setuid, struct cred *new, const struct cred *old, i
         }
 
         lin->expected_uid = new_uid;
-        bpf_map_update_elem(&lineage_map, &pid, lin, BPF_EXIST);
     }
 
+    return 0;
+}
+
+// TASK ALLOC HELPERS AND HOOK
+
+SEC("lsm/task_alloc")
+int BPF_PROG(kguard_task_alloc, struct task_struct *task, unsigned long clone_flags) {
+    struct task_struct *current = (struct task_struct *)bpf_get_current_task_btf();
+    
+    struct process_lineage *parent_lin = bpf_task_storage_get(&lineage_map, current, 0, 0);
+    struct process_lineage *child_lin = bpf_task_storage_get(&lineage_map, task, 0, BPF_LOCAL_STORAGE_GET_F_CREATE);
+    
+    if (child_lin) {
+        if (parent_lin) {
+            child_lin->suspicious_ancestor = parent_lin->suspicious_ancestor;
+            child_lin->expected_uid = parent_lin->expected_uid;
+            child_lin->setuid_allowed = parent_lin->setuid_allowed;
+            __builtin_memcpy(child_lin->ancestor_filename, parent_lin->ancestor_filename, PATH_BUF_SIZE);
+        } else {
+            child_lin->expected_uid = (__u32)bpf_get_current_uid_gid();
+            child_lin->setuid_allowed = 0;
+        }
+        child_lin->parent_pid = BPF_CORE_READ(current, tgid);
+    }
     return 0;
 }
 

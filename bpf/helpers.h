@@ -20,7 +20,6 @@ static __always_inline int get_current_exe_id(struct file_id *out) {
 
     out->ino = BPF_CORE_READ(inode, i_ino);
     out->dev = BPF_CORE_READ(inode, i_sb, s_dev);
-    bpf_printk("kguard: exe dev=%llu ino=%llu\n", out->dev, out->ino);
     return 0;
 }
 
@@ -63,9 +62,6 @@ static __always_inline long read_path(char *dst, __u32 dst_size, const void *src
 }
 
 static __always_inline void fill_common(struct event_hdr *e, __u32 evt_type) {
-    // We zero out the memory before we used it
-    // cause someone decided giving back a pointer 
-    // without zeroing the memory is a good idea !
     __builtin_memset(e, 0, sizeof(*e));
 
     __u64 id = bpf_get_current_pid_tgid();
@@ -86,8 +82,9 @@ static __always_inline void fill_common(struct event_hdr *e, __u32 evt_type) {
     bpf_probe_read_kernel(&ppid, sizeof(ppid), &parent->tgid);
     e->ppid = (__u32)ppid;
 
-    // Looking up process lineage state
-    struct process_lineage *lin = bpf_map_lookup_elem(&lineage_map, &e->pid);
+    struct task_struct *current_task = (struct task_struct *)bpf_get_current_task_btf();
+    struct process_lineage *lin = bpf_task_storage_get(&lineage_map, current_task, 0, 0);
+    
     if (lin) {
         e->ancestor_suspicious = lin->suspicious_ancestor;
         __builtin_memcpy(e->ancestor_filename, lin->ancestor_filename, sizeof(e->ancestor_filename));

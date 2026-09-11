@@ -143,6 +143,7 @@ const (
 	BPFMapSuspiciousPaths          = "suspicious_paths"
 	BPFProgKguardKernelLoadData    = "kguard_kernel_load_data"
 	BPFProgKguardKernelReadFile    = "kguard_kernel_read_file"
+	BPFProgKguardTaskAlloc         = "kguard_task_alloc"
 	BPFProgKguardTaskFixSetuid     = "kguard_task_fix_setuid"
 	BPFProgLsmBpfCmd               = "lsm_bpf_cmd"
 	BPFProgLsmBprmCheck            = "lsm_bprm_check"
@@ -220,6 +221,7 @@ type BPFSpecs struct {
 type BPFProgramSpecs struct {
 	KguardKernelLoadData *ebpf.ProgramSpec `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.ProgramSpec `ebpf:"kguard_kernel_read_file"`
+	KguardTaskAlloc      *ebpf.ProgramSpec `ebpf:"kguard_task_alloc"`
 	KguardTaskFixSetuid  *ebpf.ProgramSpec `ebpf:"kguard_task_fix_setuid"`
 	LsmBpfCmd            *ebpf.ProgramSpec `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
@@ -347,6 +349,7 @@ type BPFVariables struct {
 type BPFPrograms struct {
 	KguardKernelLoadData *ebpf.Program `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.Program `ebpf:"kguard_kernel_read_file"`
+	KguardTaskAlloc      *ebpf.Program `ebpf:"kguard_task_alloc"`
 	KguardTaskFixSetuid  *ebpf.Program `ebpf:"kguard_task_fix_setuid"`
 	LsmBpfCmd            *ebpf.Program `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.Program `ebpf:"lsm_bprm_check"`
@@ -371,6 +374,7 @@ func (p *BPFPrograms) Close() error {
 	return _BPFClose(
 		p.KguardKernelLoadData,
 		p.KguardKernelReadFile,
+		p.KguardTaskAlloc,
 		p.KguardTaskFixSetuid,
 		p.LsmBpfCmd,
 		p.LsmBprmCheck,

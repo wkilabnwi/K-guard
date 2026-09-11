@@ -9,6 +9,16 @@ rules:
     action: "BLOCK"
     expression: "process.path == '/bin/env'"
 
+  - name: "Direct Suspicious Binary Execution"
+    severity: "medium"
+    action: "ALERT"
+    expression: "event.is_suspicious_path == true && event.ancestor_suspicious == false"
+
+  - name: "Suspicious Lineage Execution (Child Process)"
+    severity: "high"
+    action: "ALERT"
+    expression: "event.ancestor_suspicious == true"
+
   - name: "Reverse shell (nc) from suspicious path, detect+kill"
     severity: "critical"
     action: "KILL"
