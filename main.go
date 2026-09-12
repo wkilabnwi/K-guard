@@ -112,6 +112,8 @@ func main() {
 	configPath := flag.String("config", "configs/rules.json", "path to the JSON rule/policy config file")
 	checkOnly := flag.Bool("check", false, "validate the config file and exit (0 = valid, 1 = invalid), no eBPF/kernel interaction")
 	showVersion := flag.Bool("version", false, "print version info and exit")
+	testRuleExpr := flag.String("test-rule", "", "test a CEL expression against a mock JSON event")
+	testRuleEvent := flag.String("test-event", "", "optional JSON string or path to JSON file containing mock event data")
 	flag.Parse()
 
 	if *showVersion {
@@ -127,6 +129,49 @@ func main() {
 		}
 		log.Printf("OK: %s is valid (%d rules, %d allowlist entries, enforcement=%v)",
 			*configPath, len(c.Rules), len(c.Allowlist), c.EnforcementEnabled)
+		os.Exit(0)
+	}
+
+	if *testRuleExpr != "" {
+		celEnv, err := config.GetCELEnvironment()
+		if err != nil {
+			log.Fatalf("Failed to initialize CEL env: %v", err)
+		}
+
+		var mockData map[string]any
+		if *testRuleEvent != "" {
+			var rawBytes []byte
+			if strings.HasPrefix(*testRuleEvent, "{") {
+				rawBytes = []byte(*testRuleEvent)
+			} else {
+				rawBytes, err = os.ReadFile(*testRuleEvent)
+				if err != nil {
+					log.Fatalf("Failed to read test-event file: %v", err)
+				}
+			}
+
+			if err := json.Unmarshal(rawBytes, &mockData); err != nil {
+				log.Fatalf("Failed to parse test-event JSON: %v", err)
+			}
+		} else {
+			mockData = processor.DefaultMockEvent()
+		}
+
+		res := processor.TestExpression(celEnv, *testRuleExpr, mockData)
+
+		if !res.Valid {
+			fmt.Printf("Compilation Error:\n%s\n", res.CompilationErr)
+			os.Exit(1)
+		}
+		if res.EvalErr != "" {
+			fmt.Printf("Evaluation Error:\n%s\n", res.EvalErr)
+			os.Exit(1)
+		}
+		if res.Result {
+			fmt.Println("Match: TRUE")
+		} else {
+			fmt.Println("No Match: FALSE")
+		}
 		os.Exit(0)
 	}
 

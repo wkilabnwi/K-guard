@@ -223,6 +223,9 @@ Common gotchas:
 - **CEL Expression Syntax Validation**: K-Guard pre-compiles and 
   validates `CEL` syntax on startup/reload and will reject invalid 
   expressions (e.g., syntax errors, unparseable operators, or invalid field accesses).
+- **Offline CEL Rule Testing**: Test and verify custom CEL rules against mock data 
+  using `-test-rule` (and optional `-test-event`) directly from the CLI without needing a 
+  running eBPF environment.
 - **YAML/JSON Flexibility**: Parser logic auto-detects `YAML` or `JSON` format 
   regardless of the file extension fallback.
 - **empty strings in path/comm lists.** `suspicious_path`,
@@ -423,6 +426,13 @@ sudo ./k-guard -config /config/rules.json
 
 Validate a config without touching the kernel:
 sudo ./k-guard -config /config/rules.json -check
+
+# Test a CEL rule expression against default mock event context
+./k-guard -test-rule "process.basename == 'nc'"
+
+# Test a CEL rule against inline JSON or a mock event file
+./k-guard -test-rule "process.path.startsWith('/tmp/')" -test-event '{"event": {"process": {"path": "/tmp/malware"}}}'
+./k-guard -test-rule "process.basename == 'nc'" -test-event ./mock_event.json
 
 Print build/version info:
 ./k-guard -version

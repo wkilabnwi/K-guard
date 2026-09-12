@@ -7,13 +7,16 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"time"
 
 	"k-guard/internal/alert"
+	"k-guard/internal/config"
 	"k-guard/internal/dashboard/httpauth"
+	"k-guard/internal/processor"
 )
 
 // templatesFS embeds the dashboard's HTML template so it ships inside the
@@ -52,6 +55,7 @@ func (s *Server) Start() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/alerts", s.handleAlertsJSON)
+	mux.HandleFunc("/api/v1/rules/test", s.handleTestRule)
 
 	s.httpSrv = &http.Server{
 		Addr:              s.addr,
@@ -113,4 +117,43 @@ func (s *Server) handleAlertsJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(alerts)
+}
+
+type RuleTestRequest struct {
+	Expression string         `json:"expression"`
+	MockData   map[string]any `json:"mock_data"`
+}
+
+func (s *Server) handleTestRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RuleTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Expression == "" {
+		http.Error(w, "Field 'expression' is required", http.StatusBadRequest)
+		return
+	}
+
+	celEnv, err := config.GetCELEnvironment()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load CEL environment: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	mockData := req.MockData
+	if mockData == nil {
+		mockData = processor.DefaultMockEvent()
+	}
+
+	result := processor.TestExpression(celEnv, req.Expression, mockData)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
