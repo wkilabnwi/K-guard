@@ -5,6 +5,7 @@ import (
 	"k-guard/internal/trust"
 	"log"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 
@@ -260,6 +261,10 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("setting self_pid: %w", err)
 	}
 
+	if err := m.RegisterProtectedIDs(); err != nil {
+		log.Printf("[ebpf] WARNING: failed to populate protected IDs map: %v", err)
+	}
+
 	if !m.LSMEnabled {
 		log.Println("[ebpf] NOTE: without the LSM hook, K-Guard can only react after a binary has already started executing, not prevent the exec outright.")
 	}
@@ -436,6 +441,66 @@ func pathToKey(p string) [256]byte {
 	var k [256]byte
 	copy(k[:], p)
 	return k
+}
+
+func (m *Manager) RegisterProtectedIDs() error {
+	if m.Objects.ProtectedIds == nil {
+		return nil
+	}
+
+	var val uint8 = 1
+
+	// Helper to extract FD info and store ID
+	protectObj := func(obj any) {
+		valRef := reflect.ValueOf(obj)
+		if valRef.Kind() != reflect.Struct {
+			return
+		}
+
+		for i := 0; i < valRef.NumField(); i++ {
+			field := valRef.Field(i)
+			if field.IsNil() {
+				continue
+			}
+
+			// Check for ebpf Map
+			if bpfMap, ok := field.Interface().(*ebpf.Map); ok {
+				if info, err := bpfMap.Info(); err == nil {
+					if id, ok := info.ID(); ok && id != 0 {
+						_ = m.Objects.ProtectedIds.Update(&id, &val, ebpf.UpdateAny)
+					}
+				}
+			}
+
+			// Check for ebpf Program
+			if bpfProg, ok := field.Interface().(*ebpf.Program); ok {
+				if info, err := bpfProg.Info(); err == nil {
+					if id, ok := info.ID(); ok && id != 0 {
+						_ = m.Objects.ProtectedIds.Update(&id, &val, ebpf.UpdateAny)
+					}
+				}
+			}
+		}
+	}
+
+	// Iterate generated struct fields
+	protectObj(m.Objects.BPFMaps)
+	protectObj(m.Objects.BPFPrograms)
+
+	// Register attached links
+	for _, l := range m.links {
+		if l == nil {
+			continue
+		}
+		if info, err := l.Info(); err == nil {
+			if id := uint32(info.ID); id != 0 {
+				_ = m.Objects.ProtectedIds.Update(&id, &val, ebpf.UpdateAny)
+			}
+		}
+	}
+
+	log.Println("[ebpf] eBPF object self-defense map dynamically populated.")
+	return nil
 }
 
 func (m *Manager) Close() {

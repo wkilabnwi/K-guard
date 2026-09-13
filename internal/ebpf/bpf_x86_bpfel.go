@@ -137,6 +137,7 @@ const (
 	BPFMapContainerCgroups         = "container_cgroups"
 	BPFMapExecScratchMap           = "exec_scratch_map"
 	BPFMapLineageMap               = "lineage_map"
+	BPFMapProtectedIds             = "protected_ids"
 	BPFMapRb                       = "rb"
 	BPFMapScratchMap               = "scratch_map"
 	BPFMapSensitiveWritePaths      = "sensitive_write_paths"
@@ -252,6 +253,7 @@ type BPFMapSpecs struct {
 	ContainerCgroups      *ebpf.MapSpec `ebpf:"container_cgroups"`
 	ExecScratchMap        *ebpf.MapSpec `ebpf:"exec_scratch_map"`
 	LineageMap            *ebpf.MapSpec `ebpf:"lineage_map"`
+	ProtectedIds          *ebpf.MapSpec `ebpf:"protected_ids"`
 	Rb                    *ebpf.MapSpec `ebpf:"rb"`
 	ScratchMap            *ebpf.MapSpec `ebpf:"scratch_map"`
 	SensitiveWritePaths   *ebpf.MapSpec `ebpf:"sensitive_write_paths"`
@@ -303,6 +305,7 @@ type BPFMaps struct {
 	ContainerCgroups      *ebpf.Map `ebpf:"container_cgroups"`
 	ExecScratchMap        *ebpf.Map `ebpf:"exec_scratch_map"`
 	LineageMap            *ebpf.Map `ebpf:"lineage_map"`
+	ProtectedIds          *ebpf.Map `ebpf:"protected_ids"`
 	Rb                    *ebpf.Map `ebpf:"rb"`
 	ScratchMap            *ebpf.Map `ebpf:"scratch_map"`
 	SensitiveWritePaths   *ebpf.Map `ebpf:"sensitive_write_paths"`
@@ -317,6 +320,7 @@ func (m *BPFMaps) Close() error {
 		m.ContainerCgroups,
 		m.ExecScratchMap,
 		m.LineageMap,
+		m.ProtectedIds,
 		m.Rb,
 		m.ScratchMap,
 		m.SensitiveWritePaths,

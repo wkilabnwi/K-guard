@@ -313,7 +313,8 @@ func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupI
 // default. each is still its own distinct EventType in the alert so sinks
 // and the dashboard can filter them independently.
 func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severity, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, filename, detail string, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
-	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid))) {
+
+	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid)) + "|" + filename) {
 		return
 	}
 

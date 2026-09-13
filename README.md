@@ -86,7 +86,7 @@ a given deployment.
   - **Privilege Escalation Prevention**: `lsm/task_fix_setuid` blocks a process from gaining UID 0 (`-EPERM`) unless it exec'd a setuid-root binary first.
   - **Agent Self-Protection**:
     - `lsm/task_kill` intercepts termination signals targeted at K-Guard's PID and rejects them (`-EPERM`) unless sent by K-Guard itself or PID 1.
-    - `lsm/bpf` restricts critical eBPF system calls (`BPF_LINK_DETACH`, `BPF_MAP_GET_FD_BY_ID`, `BPF_PROG_GET_FD_BY_ID`, etc.) to prevent hostile processes from detaching or inspecting K-Guard's in-kernel security filters.
+    - `lsm/bpf` restricts critical eBPF system calls (`BPF_LINK_DETACH`, `BPF_MAP_GET_FD_BY_ID`, `BPF_PROG_GET_FD_BY_ID`, etc.) to prevent hostile processes from detaching or inspecting K-Guard's in-kernel security filters. On startup, K-Guard uses Go reflection (`reflect`) to inspect the `bpf2go`-generated structs dynamically; this centralizes object registration so newly added maps, programs, and active link IDs are automatically protected in the kernel without requiring manual Go code updates.
 
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading

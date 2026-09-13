@@ -10,6 +10,7 @@ static __always_inline void handle_open_checks(char *path, __u8 truncated, int f
     int write_intent = (flags & O_ACCMODE_MASK) == O_WRONLY_ ||
                         (flags & O_ACCMODE_MASK) == O_RDWR_;
 
+
     // Check for sensitive write operations
     if (write_intent && path_in_map(path, &sensitive_write_paths)) {
         struct open_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
