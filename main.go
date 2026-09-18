@@ -23,6 +23,7 @@ import (
 	"k-guard/internal/config"
 	"k-guard/internal/dashboard"
 	"k-guard/internal/dashboard/httpauth"
+	"k-guard/internal/dataset"
 	kebpf "k-guard/internal/ebpf"
 	k8s "k-guard/internal/k8s"
 	"k-guard/internal/metrics"
@@ -284,8 +285,17 @@ func main() {
 		}
 	}
 
+	telemetryChan := make(chan processor.MLRecord, 10000)
+	datasetPath := "/var/lib/kguard/telemetry.bin"
+	if col, err := dataset.NewCollector(datasetPath); err != nil {
+		log.Printf("[dataset] collector disabled: %v", err)
+	} else {
+		col.Start(telemetryChan)
+		log.Printf("[dataset] recording ML telemetry to %s", datasetPath)
+	}
+
 	engine := processor.NewEngine(cfgMgr, guard, dispatcher, metricsRegistry, mgr, k8sResolver)
-	router := processor.NewRouter(engine, metricsRegistry, cfgMgr)
+	router := processor.NewRouter(engine, metricsRegistry, cfgMgr, telemetryChan)
 
 	quit := make(chan bool)
 	var wg sync.WaitGroup

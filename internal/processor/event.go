@@ -35,14 +35,28 @@ type Router struct {
 	cfg     *config.Manager
 
 	ignoredConnect *trust.Set
+
+	telemetryChan chan MLRecord
 }
 
-func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager) *Router {
+type MLRecord struct {
+	Timestamp uint64
+	ParentDev uint64
+	ParentIno uint64
+	ChildDev  uint64
+	ChildIno  uint64
+	CgroupID  uint64
+	EventType uint32
+	UID       uint32
+}
+
+func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager, telemetryChan chan MLRecord) *Router {
 	r := &Router{
 		engine:         engine,
 		metrics:        m,
 		cfg:            cfg,
 		ignoredConnect: trust.NewSet(),
+		telemetryChan:  telemetryChan,
 	}
 	r.applyConfig(cfg.Current())
 	cfg.OnChange(r.applyConfig)
@@ -59,6 +73,23 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &hdr); err != nil {
 		r.metrics.IncRingbufDrop()
 		return
+	}
+
+	if r.telemetryChan != nil && (hdr.EventType == uint32(kebpf.EventExec) || hdr.EventType == uint32(kebpf.EventExecBlocked)) {
+		select {
+		case r.telemetryChan <- MLRecord{
+			Timestamp: hdr.TimestampNs,
+			ParentDev: hdr.ParentExeDev,
+			ParentIno: hdr.ParentExeIno,
+			ChildDev:  hdr.ExeDev,
+			ChildIno:  hdr.ExeIno,
+			CgroupID:  hdr.CgroupId,
+			EventType: hdr.EventType,
+			UID:       hdr.Uid,
+		}:
+		default:
+			// Drop under heavy ringbuf load to protect agent latency
+		}
 	}
 
 	et := kebpf.EventType(hdr.EventType)

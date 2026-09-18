@@ -41,12 +41,18 @@ struct event_hdr {
     __u8  ancestor_suspicious;
     char  ancestor_filename[PATH_BUF_SIZE];
 
+    // okey for all the hardened linux engineers out there
+    // i will definitely make the struct more compact to not
+    // deal with verifier problems 
+    // source : trust me
     __u64 exe_dev;
-    __u64 exe_ino; 
+    __u64 exe_ino;
+    __u64 parent_exe_dev;
+    __u64 parent_exe_ino; 
 
     // this is used for a couple of things
     // will definetely make it right today or
-    // tomorrow (or until it breaks)
+    // tomorrow (or until it breaks) (NOTE 1 18/09/26 : "isn't broken yet")
      __s32 ret;
 
 };

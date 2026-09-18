@@ -413,6 +413,28 @@ the kernel for an unrelated process can't be killed by mistake.
 To prevent memory bloat or memory leaks under heavy syscall load on high-throughput nodes:
 - **Max RSS Memory Valve (`max_memory_mb`)**: Monitors K-Guard's runtime memory allocation every 10 seconds. If memory allocation exceeds the configured threshold (`max_memory_mb`), K-Guard automatically triggers an immediate Garbage Collection (`runtime.GC()`) to reclaim memory and stabilize RSS footprint.
 
+## ML Telemetry Pipeline & Anomaly Dataset
+
+K-Guard includes an asynchronous, non-blocking telemetry tap designed for behavioral baselining and machine learning model training.
+
+- **Tamper-Proof Inode Identification**: Trains directly on filesystem `(dev, ino)` integer pairs (`parent_exe_ino` $\rightarrow$ `exe_ino`) rather than spoofable process string names (`comm` or path strings). Training on raw 64-bit integers speeds up offline graph generation and model training.
+- **Zero-Allocation Binary Storage**: Events are written directly as raw 56-byte Little-Endian fixed structs (`binary.Write`) to `/var/lib/kguard/telemetry.bin`. Storing packed binary structs avoids string allocations, JSON encoding, and CPU overhead inside the agent event loop.
+- **Non-Blocking Channel Tap**: Telemetry is dispatched over a buffered Go channel (`telemetryChan`). If the telemetry consumer falls behind under heavy system load, dropped telemetry samples preserve core agent enforcement latency.
+
+> **Note:** This telemetry pipeline is the foundational first step toward an automated ML-supported anomaly prevention system.
+
+### Inspecting Telemetry Data
+
+To verify that the dataset pipeline is recording active transitions, run the provided Python inspection script. Because `/var/lib/kguard/telemetry.bin` is written with root-only permissions (`0600`), run the script with `sudo`:
+
+```bash
+sudo python3 scripts/inspect_telemetry.py
+```
+
+The script unpacks the 56-byte binary structures, aggregates parent-child execution frequencies, and resolves inodes back to human-readable binary paths on disk.
+
+> **Note:** The `inspect_telemetry.py` script is intended solely as a quick verification tool to confirm that the telemetry pipeline is active and writing binary records correctly. Some inodes may display as `ino:XXXXX` because the script only scans basic system directories (`/bin`, `/usr/bin`, `/sbin`, `/usr/sbin`) rather than performing full system-wide or container filesystem resolution.
+
 ## Testing & Troubleshooting
 
 **Testing LSM Hooks Note** : When testing security hooks like `PTRACE`, keep kernel credential checks (`__ptrace_may_access`) in mind. Non-root users targeting root processes (like PID 1) will be rejected by the kernel with `-EPERM` before reaching the eBPF LSM layer. To test eBPF-level dropping and event emission correctly, run tests with appropriate capabilities/root or target processes owned by the same user.

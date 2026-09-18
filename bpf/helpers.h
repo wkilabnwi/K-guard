@@ -7,8 +7,9 @@
 
 
 
-static __always_inline int get_current_exe_id(struct file_id *out) {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+static __always_inline int get_task_exe_id(struct task_struct *task, struct file_id *out) {
+    if (!task) return -1;
+    
     struct mm_struct *mm = BPF_CORE_READ(task, mm);
     if (!mm) return -1;
 
@@ -21,6 +22,11 @@ static __always_inline int get_current_exe_id(struct file_id *out) {
     out->ino = BPF_CORE_READ(inode, i_ino);
     out->dev = BPF_CORE_READ(inode, i_sb, s_dev);
     return 0;
+}
+
+static __always_inline int get_current_exe_id(struct file_id *out) {
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    return get_task_exe_id(task, out);
 }
 
 
@@ -75,31 +81,31 @@ static __always_inline void fill_common(struct event_hdr *e, __u32 evt_type) {
     
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
 
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    struct task_struct *parent;
-    bpf_probe_read_kernel(&parent, sizeof(parent), &task->real_parent);
-    pid_t ppid;
-    bpf_probe_read_kernel(&ppid, sizeof(ppid), &parent->tgid);
-    e->ppid = (__u32)ppid;
-
     struct task_struct *current_task = (struct task_struct *)bpf_get_current_task_btf();
-    struct process_lineage *lin = bpf_task_storage_get(&lineage_map, current_task, 0, 0);
+    struct task_struct *parent = BPF_CORE_READ(current_task, real_parent);
     
+    if (parent) {
+        e->ppid = (__u32)BPF_CORE_READ(parent, tgid);
+        
+        struct file_id parent_exe_id;
+        if (get_task_exe_id(parent, &parent_exe_id) == 0) {
+            e->parent_exe_dev = parent_exe_id.dev;
+            e->parent_exe_ino = parent_exe_id.ino;
+        }
+    }
+
+    // Lineage lookup for suspicious ancestors
+    struct process_lineage *lin = bpf_task_storage_get(&lineage_map, current_task, 0, 0);
     if (lin) {
         e->ancestor_suspicious = lin->suspicious_ancestor;
         __builtin_memcpy(e->ancestor_filename, lin->ancestor_filename, sizeof(e->ancestor_filename));
-    } else {
-        e->ancestor_suspicious = 0;
-        __builtin_memset(e->ancestor_filename, 0, sizeof(e->ancestor_filename));
     }
 
+    // Child/Current process Exe ID resolution
     struct file_id exe_id;
-    if (get_current_exe_id(&exe_id) == 0) {
+    if (get_task_exe_id(current_task, &exe_id) == 0) {
         e->exe_dev = exe_id.dev;
         e->exe_ino = exe_id.ino;
-    } else {
-        e->exe_dev = 0;
-        e->exe_ino = 0;
     }
 }
 

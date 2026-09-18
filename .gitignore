@@ -2,7 +2,7 @@
 k-guard
 
 #Random
-scripts/
+scripts/provision-vm.sh
 test/
 .env
 bpf/include/vmlinux.h

@@ -68,7 +68,6 @@ protected_comms:
 suspicious_path:
   - "/testkill/"
   - "/tmp/"
-  - "/etc/"
 
 ignored_connect_comms:
   - "/usr/sbin/sshd"

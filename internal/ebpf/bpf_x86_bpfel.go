@@ -39,6 +39,8 @@ type BPFEventHdr struct {
 	_                  [3]byte
 	ExeDev             uint64
 	ExeIno             uint64
+	ParentExeDev       uint64
+	ParentExeIno       uint64
 	Ret                int32
 	_                  [4]byte
 }

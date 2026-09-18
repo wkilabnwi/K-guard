@@ -193,7 +193,7 @@ func TestEngine_AnalyzeExec(t *testing.T) {
 func TestRouter_ProcessRawRecord(t *testing.T) {
 	eng, sink, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	hdr := kebpf.BPFEventHdr{
 		EventType: uint32(kebpf.EventExec),
@@ -309,7 +309,7 @@ func TestEngine_GenericAnalyzers(t *testing.T) {
 func TestRouter_AllEvents(t *testing.T) {
 	eng, sink, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	makeHdr := func(et kebpf.EventType) kebpf.BPFEventHdr {
 		h := kebpf.BPFEventHdr{
@@ -447,7 +447,7 @@ func TestEngine_ApplyConfig_NilManager(t *testing.T) {
 func TestRouter_OpenEventsAndEdgeCases(t *testing.T) {
 	eng, sink, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	makeHdr := func(et kebpf.EventType) kebpf.BPFEventHdr {
 		h := kebpf.BPFEventHdr{
@@ -501,7 +501,7 @@ func TestRouter_OpenEventsAndEdgeCases(t *testing.T) {
 func TestRouter_MalformedRecord(t *testing.T) {
 	eng, _, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	// Short byte array to trigger binary read error
 	router.ProcessRawRecord([]byte{0x01, 0x02})
@@ -552,7 +552,7 @@ func TestIsIgnoredComm(t *testing.T) {
 func TestRouter_IPv6Connect(t *testing.T) {
 	eng, sink, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	makeHdr := func(et kebpf.EventType) kebpf.BPFEventHdr {
 		return kebpf.BPFEventHdr{
@@ -594,7 +594,7 @@ func TestRouter_IPv6Connect(t *testing.T) {
 func TestRouter_UnknownAddressFamily(t *testing.T) {
 	eng, sink, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	unknownEvt := kebpf.BPFConnectEvent{
 		Hdr: kebpf.BPFEventHdr{
@@ -657,7 +657,7 @@ func TestFormatTree_FallbackToComm(t *testing.T) {
 func TestRouter_PtraceBlocked_EmptyTargetComm(t *testing.T) {
 	eng, sink, cfgMgr := setupTestEngine(t)
 	m := metrics.NewRegistry()
-	router := NewRouter(eng, m, cfgMgr)
+	router := NewRouter(eng, m, cfgMgr, nil)
 
 	hdr := kebpf.BPFEventHdr{
 		EventType: uint32(kebpf.EventPtraceBlocked),
