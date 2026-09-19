@@ -163,4 +163,19 @@ static __always_inline void read_process_args(struct exec_event *e) {
         e->args[len + 1] = 0x00;
     }
 }
+
+static __always_inline int is_prefix_blocked(const char *path) {
+    struct lpm_prefix_key key = {
+        // Set to maximum buffer bit length
+        .prefixlen = sizeof(key.basename) * 8 
+    };
+
+    // Copy path into key data
+    bpf_probe_read_kernel_str(key.basename, sizeof(key.basename), path);
+
+    __u8 *val = bpf_map_lookup_elem(&blocked_prefix, &key);
+    return (val && *val == 1) ? 1 : 0;
+}
+
+
 #endif

@@ -90,6 +90,11 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
         return -1;
     }
 
+    if (is_prefix_blocked(path)) {
+        emit_exec_event(EVT_EXEC_BLOCKED, path, truncated, 0);
+        return -1;
+    }
+
     struct file *file = BPF_CORE_READ(bprm, file);
     if (file) {
         struct inode *inode = BPF_CORE_READ(file, f_inode);

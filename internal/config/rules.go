@@ -69,6 +69,9 @@ type Rule struct {
 
 	// ExactBlockPath is extracted automatically from simple exact path expressions for LSM sync
 	ExactBlockPath string `yaml:"-" json:"-"`
+
+	// ExactBlockBasename is extracted automatically from simple process.prefix expressions for LSM sync
+	ExactBlockPrefix string `yaml:"-" json:"-"`
 }
 
 func (r *Rule) Validate(celEnv *cel.Env) error {
@@ -102,10 +105,18 @@ func (r *Rule) Validate(celEnv *cel.Env) error {
 	r.Program = prg
 
 	// Helper extract for exact_path matching used by LSM pre-exec block hooks
-	if r.Action == ActionBlock && strings.Contains(r.Expression, "process.path ==") {
-		parts := strings.Split(r.Expression, "process.path ==")
-		if len(parts) == 2 {
-			r.ExactBlockPath = strings.Trim(strings.TrimSpace(parts[1]), "\"'`")
+	if r.Action == ActionBlock {
+		if strings.Contains(r.Expression, "process.path ==") {
+			parts := strings.Split(r.Expression, "process.path ==")
+			if len(parts) == 2 {
+				r.ExactBlockPath = strings.Trim(strings.TrimSpace(parts[1]), "\"'`")
+			}
+		}
+		if strings.Contains(r.Expression, "process.path.startsWith(") {
+			parts := strings.Split(r.Expression, "process.path.startsWith(")
+			if len(parts) == 2 {
+				r.ExactBlockPrefix = strings.Trim(parts[1], ")\"'` ")
+			}
 		}
 	}
 
@@ -216,6 +227,16 @@ func (c *Config) BlockedPatterns() []string {
 	for _, r := range c.Rules {
 		if r.Action == ActionBlock && r.ExactBlockPath != "" {
 			out = append(out, r.ExactBlockPath)
+		}
+	}
+	return out
+}
+
+func (c *Config) BlockedPrefix() []string {
+	var out []string
+	for _, r := range c.Rules {
+		if r.Action == ActionBlock && r.ExactBlockPrefix != "" {
+			out = append(out, r.ExactBlockPrefix)
 		}
 	}
 	return out

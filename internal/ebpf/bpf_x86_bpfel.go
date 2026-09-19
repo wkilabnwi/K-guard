@@ -88,6 +88,12 @@ type BPFLpeEvent struct {
 	NewUid uint32
 }
 
+type BPFLpmPrefixKey struct {
+	_         structs.HostLayout
+	Prefixlen uint32
+	Basename  [256]int8
+}
+
 type BPFOpenEvent struct {
 	_             structs.HostLayout
 	Hdr           BPFEventHdr
@@ -135,6 +141,7 @@ type BPFScratchBuffer struct {
 const (
 	BPFMapAllowedPtraceAttaches    = "allowed_ptrace_attaches"
 	BPFMapBlockedPaths             = "blocked_paths"
+	BPFMapBlockedPrefix            = "blocked_prefix"
 	BPFMapBlockedWritePaths        = "blocked_write_paths"
 	BPFMapContainerCgroups         = "container_cgroups"
 	BPFMapExecScratchMap           = "exec_scratch_map"
@@ -251,6 +258,7 @@ type BPFProgramSpecs struct {
 type BPFMapSpecs struct {
 	AllowedPtraceAttaches *ebpf.MapSpec `ebpf:"allowed_ptrace_attaches"`
 	BlockedPaths          *ebpf.MapSpec `ebpf:"blocked_paths"`
+	BlockedPrefix         *ebpf.MapSpec `ebpf:"blocked_prefix"`
 	BlockedWritePaths     *ebpf.MapSpec `ebpf:"blocked_write_paths"`
 	ContainerCgroups      *ebpf.MapSpec `ebpf:"container_cgroups"`
 	ExecScratchMap        *ebpf.MapSpec `ebpf:"exec_scratch_map"`
@@ -303,6 +311,7 @@ func (o *BPFObjects) Close() error {
 type BPFMaps struct {
 	AllowedPtraceAttaches *ebpf.Map `ebpf:"allowed_ptrace_attaches"`
 	BlockedPaths          *ebpf.Map `ebpf:"blocked_paths"`
+	BlockedPrefix         *ebpf.Map `ebpf:"blocked_prefix"`
 	BlockedWritePaths     *ebpf.Map `ebpf:"blocked_write_paths"`
 	ContainerCgroups      *ebpf.Map `ebpf:"container_cgroups"`
 	ExecScratchMap        *ebpf.Map `ebpf:"exec_scratch_map"`
@@ -318,6 +327,7 @@ func (m *BPFMaps) Close() error {
 	return _BPFClose(
 		m.AllowedPtraceAttaches,
 		m.BlockedPaths,
+		m.BlockedPrefix,
 		m.BlockedWritePaths,
 		m.ContainerCgroups,
 		m.ExecScratchMap,

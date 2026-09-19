@@ -55,6 +55,10 @@ func (e *Engine) applyConfig(c *config.Config) {
 	if e.ebpfMgr == nil {
 		return
 	}
+
+	if err := e.ebpfMgr.SyncPrefixBlocks(c.BlockedPrefix()); err != nil {
+		log.Printf("[engine] failed to sync LPM prefix block-list: %v", err)
+	}
 	if err := e.ebpfMgr.SyncBlockedPaths(c.BlockedPatterns()); err != nil {
 		log.Printf("[engine] failed to sync LSM block-list: %v", err)
 	}

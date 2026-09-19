@@ -77,6 +77,14 @@ struct {
     __type(value, __u8);  
 } container_cgroups SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 1024);
+    __uint(map_flags, BPF_F_NO_PREALLOC); 
+    __type(key, struct lpm_prefix_key);
+    __type(value, __u8);                 
+} blocked_prefix SEC(".maps");
+
 
 
 volatile __u8 enforcement_enabled SEC(".bss");

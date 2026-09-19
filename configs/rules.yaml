@@ -4,6 +4,11 @@ rules:
     action: "BLOCK"
     expression: "process.path == '/usr/bin/nc'"
 
+  - name: "Block all binary execution inside /tmp/kguard_prefix/"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path.startsWith('/tmp/kguard_prefix/')"
+
   - name: "Test env block"
     severity: "critical"
     action: "BLOCK"

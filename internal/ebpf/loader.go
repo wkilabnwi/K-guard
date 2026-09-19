@@ -33,6 +33,11 @@ type Manager struct {
 	ptraceAllow *trust.Set
 }
 
+type LpmKey256 struct {
+	PrefixLenBits uint32
+	Data          [256]byte
+}
+
 type FileID struct {
 	Dev uint64
 	Ino uint64
@@ -427,6 +432,21 @@ func (m *Manager) SyncAllowedPtraceAttached(paths []string) error {
 		want[id] = true
 	}
 	return syncKeyedMap(em, want)
+}
+
+func makeLpmKey256(prefix string) LpmKey256 {
+	var k LpmKey256
+	k.PrefixLenBits = uint32(len(prefix) * 8)
+	copy(k.Data[:], prefix)
+	return k
+}
+
+func (m *Manager) SyncPrefixBlocks(prefixes []string) error {
+	em := m.Objects.BlockedPrefix
+	if em == nil {
+		return nil
+	}
+	return syncTypedMap(em, prefixes, makeLpmKey256)
 }
 
 func (m *Manager) AddContainerCgroup(cgroupID uint64) error {

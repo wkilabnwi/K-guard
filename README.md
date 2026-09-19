@@ -79,7 +79,7 @@ a given deployment.
   exec after the fact: it alerts and, for `KILL`/`BLOCK` rules, sends
   `SIGKILL` to the offending PID via `pidfd`.
 - **PREVENTION**: When LSM hooks attach and `enforcement_enabled: true`:
-  - **Exec Prevention**: `bprm_check_security` drops blocked binaries (`-EPERM`).
+  - **Exec Prevention**: `bprm_check_security` drops blocked binaries (`-EPERM`) pre-flight. Supports both exact path matching (`BPF_MAP_TYPE_HASH`) and zero-latency path prefix matching (`BPF_MAP_TYPE_LPM_TRIE` for `process.path.startsWith` rules)..
   - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
   - **Ptrace Prevention**: When `ptrace_enforcement_enabled`: true and LSM hooks are active, `lsm/ptrace_access_check` blocks unauthorized injection attempts unless the caller matches the `allowed_ptrace_attaches` whitelist.
   - **Kernel Module Load Prevention**: Intercepts `init_module` calls and blocks them at the kernel boundary when originating from tracked container cgroups registered in the `container_cgroups` BPF map.
@@ -113,7 +113,7 @@ Rules are evaluated using Common Expression Language (CEL), providing flexibilit
 * **`action`**: 
   * `ALERT`: Generate alert only.
   * `KILL`: Terminate process post-exec via `pidfd_send_signal`.
-  * `BLOCK`: Sync exact path to in-kernel LSM map for pre-exec block (falls back to `KILL` if path isn't explicit).
+  * `BLOCK`: Sync path or prefix to in-kernel LSM map for pre-exec block (falls back to `KILL` for basename matches).
 * **`expression`**: CEL expression evaluated against the event context.
 
 ### Example Configurations

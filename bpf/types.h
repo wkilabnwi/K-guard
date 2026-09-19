@@ -148,5 +148,10 @@ struct file_id {
     __u64 ino;
 };
 
+struct lpm_prefix_key {
+    __u32 prefixlen;          
+    char  basename[PATH_BUF_SIZE];        
+};
+
 
 #endif
