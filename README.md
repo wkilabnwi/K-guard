@@ -24,6 +24,7 @@ it, a BPF LSM hook:
 | `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
 | `PTRACE_BLOCKED`|`lsm/ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
 | `SETUID` | `sys_enter_setuid` | Privilege changes |
+| `NS_CHANGE` | `sys_enter_unshare` / `sys_enter_setns` | Namespace mutation attempts (`unshare()` and `setns()`) |
 | `LPE_BLOCKED` | `lsm/task_fix_setuid` | Pre-emptively blocks a UID transition to root unless the process legitimately gained it via a setuid-root binary, tracked in kernel-side lineage |
 | `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
 `KMOD_BLOCKED` | `lsm/kernel_read_file, lsm/kernel_load_data` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
@@ -344,6 +345,12 @@ cache is warm before the first eBPF events arrive.
 > `kubelet_insecure`) are read once at startup.
 > so unlike `kubelet_cert_file`, `kubelet_key_file`, `kubelet_url`.
 > which are hot-reloadable, the first three aren't.
+
+### Container Escape & Namespace Security
+
+K-Guard tracks process namespace mutations to detect container breakout techniques:
+* **Namespace Hopping (`setns`)**: Intercepts attempts by processes to join existing host/pod namespaces (e.g., using `nsenter` to attach to PID 1 or host mount namespaces).
+* **Isolation Breakdown (`unshare`)**: Flags processes creating new unshared namespaces (e.g., `CLONE_NEWNS`, `CLONE_NEWPID`) from within tracked container cgroups (`container_cgroups`), catching early-stage privilege escalation and escape vectors.
 
 ## Alert sinks
 

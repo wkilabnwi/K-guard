@@ -181,6 +181,18 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			hdr.CgroupId, destIP, destPort, ancestorSuspicious, ancestorFilename,
 		)
 
+	case kebpf.EventNsChange:
+		var evt kebpf.BPFNsChangeEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		r.engine.AnalyzeNsChange(
+			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId,
+			evt.Op, evt.Flags, evt.Nstype, ancestorSuspicious, ancestorFilename,
+		)
+
 	case kebpf.EventOpenSensitive, kebpf.EventMemfd, kebpf.EventSensitiveWrite:
 		var evt kebpf.BPFOpenEvent
 		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {

@@ -490,6 +490,31 @@ func (e *Engine) AnalyzePmu(pid, ppid, uid, gid uint32, comm string, cgroupID ui
 	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
+func (e *Engine) AnalyzeNsChange(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, op uint32, flags uint64, nstype uint32, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow("ns_change|" + strconv.Itoa(int(pid)) + "|" + strconv.Itoa(int(op))) {
+		return
+	}
+
+	opName := "unshare"
+	if op == 2 {
+		opName = "setns"
+	}
+
+	detail := fmt.Sprintf("Namespace manipulation attempt via %s() (flags/fd=0x%x, nstype=0x%x)", opName, flags, nstype)
+	sev := config.SeverityHigh
+	if ancestorSuspicious {
+		sev = config.SeverityCritical
+	}
+
+	a := alert.Alert{
+		Severity: string(sev), Action: string(config.ActionAlert),
+		EventType: "NS_CHANGE", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
+		Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
 // enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
 // at the next refactor this function will do the work of enriching all alerts not only the k8s context
 func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {

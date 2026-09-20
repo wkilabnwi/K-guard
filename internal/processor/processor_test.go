@@ -291,7 +291,7 @@ func TestExecHash_GetSelf(t *testing.T) {
 func TestEngine_GenericAnalyzers(t *testing.T) {
 	eng, sink, _ := setupTestEngine(t)
 
-	eng.AnalyzeNetworkEgress(1001, 1, 1000, 1000, "curl", 1, "1.1.1.1", 443, true, "/tmp/bad")
+	eng.AnalyzeNetworkEgress("CONNECT", 1001, 1, 1000, 1000, "curl", 1, "1.1.1.1", 443, true, "/tmp/bad")
 	eng.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, 1002, 1, 1000, 1000, "malware", 1, "/tmp/m", "memfd created", false, "", false)
 	eng.AnalyzeWriteBlocked("bash", "/etc/shadow", 1003, 1, 0, 0, 1, false, "", false)
 	eng.AnalyzePtraceBlocked("gdb", "target", 1004, 0x1, 1005, 1, 0, 0, 1, false, "")

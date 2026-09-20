@@ -94,6 +94,14 @@ type BPFLpmPrefixKey struct {
 	Basename  [256]int8
 }
 
+type BPFNsChangeEvent struct {
+	_      structs.HostLayout
+	Hdr    BPFEventHdr
+	Flags  uint64
+	Nstype uint32
+	Op     uint32
+}
+
 type BPFOpenEvent struct {
 	_             structs.HostLayout
 	Hdr           BPFEventHdr
@@ -172,7 +180,9 @@ const (
 	BPFProgTpSchedexec             = "tp_schedexec"
 	BPFProgTpSchedfork             = "tp_schedfork"
 	BPFProgTpSendto                = "tp_sendto"
+	BPFProgTpSetns                 = "tp_setns"
 	BPFProgTpSetuid                = "tp_setuid"
+	BPFProgTpUnshare               = "tp_unshare"
 	BPFVarEnforcementEnabled       = "enforcement_enabled"
 	BPFVarKmodEnforcementEnabled   = "kmod_enforcement_enabled"
 	BPFVarPtraceEnforcementEnabled = "ptrace_enforcement_enabled"
@@ -183,6 +193,7 @@ const (
 	BPFVarUnusedIouringEvent       = "unused_iouring_event"
 	BPFVarUnusedKmodEvent          = "unused_kmod_event"
 	BPFVarUnusedLpeEvent           = "unused_lpe_event"
+	BPFVarUnusedNsChangeEvent      = "unused_ns_change_event"
 	BPFVarUnusedOpenEvent          = "unused_open_event"
 	BPFVarUnusedPmuEvent           = "unused_pmu_event"
 	BPFVarUnusedPtraceEvent        = "unused_ptrace_event"
@@ -251,7 +262,9 @@ type BPFProgramSpecs struct {
 	TpSchedexec          *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
 	TpSendto             *ebpf.ProgramSpec `ebpf:"tp_sendto"`
+	TpSetns              *ebpf.ProgramSpec `ebpf:"tp_setns"`
 	TpSetuid             *ebpf.ProgramSpec `ebpf:"tp_setuid"`
+	TpUnshare            *ebpf.ProgramSpec `ebpf:"tp_unshare"`
 }
 
 // BPFMapSpecs contains maps before they are loaded into the kernel.
@@ -286,6 +299,7 @@ type BPFVariableSpecs struct {
 	UnusedIouringEvent       *ebpf.VariableSpec `ebpf:"unused_iouring_event"`
 	UnusedKmodEvent          *ebpf.VariableSpec `ebpf:"unused_kmod_event"`
 	UnusedLpeEvent           *ebpf.VariableSpec `ebpf:"unused_lpe_event"`
+	UnusedNsChangeEvent      *ebpf.VariableSpec `ebpf:"unused_ns_change_event"`
 	UnusedOpenEvent          *ebpf.VariableSpec `ebpf:"unused_open_event"`
 	UnusedPmuEvent           *ebpf.VariableSpec `ebpf:"unused_pmu_event"`
 	UnusedPtraceEvent        *ebpf.VariableSpec `ebpf:"unused_ptrace_event"`
@@ -356,6 +370,7 @@ type BPFVariables struct {
 	UnusedIouringEvent       *ebpf.Variable `ebpf:"unused_iouring_event"`
 	UnusedKmodEvent          *ebpf.Variable `ebpf:"unused_kmod_event"`
 	UnusedLpeEvent           *ebpf.Variable `ebpf:"unused_lpe_event"`
+	UnusedNsChangeEvent      *ebpf.Variable `ebpf:"unused_ns_change_event"`
 	UnusedOpenEvent          *ebpf.Variable `ebpf:"unused_open_event"`
 	UnusedPmuEvent           *ebpf.Variable `ebpf:"unused_pmu_event"`
 	UnusedPtraceEvent        *ebpf.Variable `ebpf:"unused_ptrace_event"`
@@ -386,7 +401,9 @@ type BPFPrograms struct {
 	TpSchedexec          *ebpf.Program `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.Program `ebpf:"tp_schedfork"`
 	TpSendto             *ebpf.Program `ebpf:"tp_sendto"`
+	TpSetns              *ebpf.Program `ebpf:"tp_setns"`
 	TpSetuid             *ebpf.Program `ebpf:"tp_setuid"`
+	TpUnshare            *ebpf.Program `ebpf:"tp_unshare"`
 }
 
 func (p *BPFPrograms) Close() error {
@@ -412,7 +429,9 @@ func (p *BPFPrograms) Close() error {
 		p.TpSchedexec,
 		p.TpSchedfork,
 		p.TpSendto,
+		p.TpSetns,
 		p.TpSetuid,
+		p.TpUnshare,
 	)
 }
 
