@@ -17,6 +17,7 @@ it, a BPF LSM hook:
 | `EXEC` | `tracepoint/sched/sched_process_exec` (+ `lsm/task_alloc` for lineage tracking) | Observed *after* the exec has already started |
 | `EXEC_BLOCKED` | `lsm/bprm_check_security` | Pre-exec : the kernel is stopped from ever running the binary |
 | `CONNECT` | `sys_enter_connect` | Outbound connections : IPv4, IPv6, and Unix domain sockets |
+| `SENDTO` | `sys_enter_sendto` | Unconnected socket egress (UDP/DNS exfiltration patterns passing explicit destination addresses) |
 | `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
 | `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
 | `BLOCKED_WRITE` | `lsm/file_open` | LSM file hook pre-emptively drops writes (`-EPERM`) on `blocked_write_paths` |
@@ -196,7 +197,7 @@ sinks:
 }
 ```
 
-Duplicate alerts for the same `(rule, pid)` (or `(connect, pid, dest_ip)`,
+Duplicate alerts for the same `(rule, pid)` (or `(connect/sendto, pid, dest_ip)`,
 or `(event_type, pid)` for the generic sensors) within
 `dedup_window_seconds` are suppressed after the first.
 

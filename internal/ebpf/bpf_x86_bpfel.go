@@ -171,6 +171,7 @@ const (
 	BPFProgTpPtrace                = "tp_ptrace"
 	BPFProgTpSchedexec             = "tp_schedexec"
 	BPFProgTpSchedfork             = "tp_schedfork"
+	BPFProgTpSendto                = "tp_sendto"
 	BPFProgTpSetuid                = "tp_setuid"
 	BPFVarEnforcementEnabled       = "enforcement_enabled"
 	BPFVarKmodEnforcementEnabled   = "kmod_enforcement_enabled"
@@ -249,6 +250,7 @@ type BPFProgramSpecs struct {
 	TpPtrace             *ebpf.ProgramSpec `ebpf:"tp_ptrace"`
 	TpSchedexec          *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
+	TpSendto             *ebpf.ProgramSpec `ebpf:"tp_sendto"`
 	TpSetuid             *ebpf.ProgramSpec `ebpf:"tp_setuid"`
 }
 
@@ -383,6 +385,7 @@ type BPFPrograms struct {
 	TpPtrace             *ebpf.Program `ebpf:"tp_ptrace"`
 	TpSchedexec          *ebpf.Program `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.Program `ebpf:"tp_schedfork"`
+	TpSendto             *ebpf.Program `ebpf:"tp_sendto"`
 	TpSetuid             *ebpf.Program `ebpf:"tp_setuid"`
 }
 
@@ -408,6 +411,7 @@ func (p *BPFPrograms) Close() error {
 		p.TpPtrace,
 		p.TpSchedexec,
 		p.TpSchedfork,
+		p.TpSendto,
 		p.TpSetuid,
 	)
 }

@@ -19,6 +19,7 @@ const (
 	EventIoUring          EventType = 13 // iouring events
 	EventLpeBlocked       EventType = 14
 	EventBranchMispredict EventType = 15
+	EventSendto           EventType = 16
 )
 
 func (t EventType) String() string {
@@ -53,6 +54,8 @@ func (t EventType) String() string {
 		return "LPE_BLOCKED"
 	case EventBranchMispredict:
 		return "BRANCH_MISPREDICT"
+	case EventSendto:
+		return "SENDTO"
 	default:
 		return "UNKNOWN"
 	}

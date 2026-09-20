@@ -125,25 +125,31 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			ancestorFilename, pathTruncated, isFileless,
 		)
 
-	case kebpf.EventConnect:
+	case kebpf.EventConnect, kebpf.EventSendto:
 		exeID := trust.FileID{Dev: hdr.ExeDev, Ino: hdr.ExeIno}
 		if r.ignoredConnect.Contains(exeID) {
 			return
 		}
+
+		var daddr uint32
+		var daddr6 [16]uint8
+		var dport uint16
+		var family uint16
+		var unixPath [108]int8
 
 		var evt kebpf.BPFConnectEvent
 		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
 			r.metrics.IncRingbufDrop()
 			return
 		}
+		daddr, daddr6, dport, family, unixPath = evt.Daddr, evt.Daddr6, evt.Dport, evt.Family, evt.UnixPath
 
 		var destIP string
-		destPort := evt.Dport
+		destPort := dport
 
-		switch evt.Family {
+		switch family {
 		case 1: // AF_UNIX
-			// Empty sun_path with no error usually means an abstract socket
-			path := int8ToString(evt.UnixPath[:])
+			path := int8ToString(unixPath[:])
 			if path == "" {
 				path = "(anonymous/abstract socket)"
 			}
@@ -152,9 +158,7 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		case 2: // AF_INET
 			ip := make(net.IP, 4)
-			// Loopback connects are near-always local tooling
-			// talking to itself so not worth alerting on, will defo change it later
-			binary.LittleEndian.PutUint32(ip, evt.Daddr)
+			binary.LittleEndian.PutUint32(ip, daddr)
 			if isLoopback(ip) {
 				return
 			}
@@ -162,18 +166,18 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		case 10: // AF_INET6
 			ip := make(net.IP, 16)
-			copy(ip, evt.Daddr6[:])
+			copy(ip, daddr6[:])
 			if isLoopback(ip) {
 				return
 			}
 			destIP = "[" + ip.String() + "]"
 
 		default:
-			destIP = fmt.Sprintf("(unknown address family %d)", evt.Family)
+			destIP = fmt.Sprintf("(unknown address family %d)", family)
 		}
 
-		r.engine.AnalyzeConnect(
-			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
+		r.engine.AnalyzeNetworkEgress(
+			string(et.String()), hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
 			hdr.CgroupId, destIP, destPort, ancestorSuspicious, ancestorFilename,
 		)
 

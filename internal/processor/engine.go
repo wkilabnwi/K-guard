@@ -289,24 +289,23 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 
 }
 
-// AnalyzeConnect handles CONNECT sensor events, escalating to CRITICAL
-// when kernel lineage marks the process as originating from a suspicious binary.
-func (e *Engine) AnalyzeConnect(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, destIP string, destPort uint16, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("connect|" + strconv.Itoa(int(pid)) + "|" + destIP) {
+// AnalyzeNetworkEgress handles CONNECT and SENDTO egress sensor events, escalating
+// to CRITICAL when kernel lineage marks the process as originating from a suspicious binary.
+func (e *Engine) AnalyzeNetworkEgress(eventType string, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, destIP string, destPort uint16, ancestorSuspicious bool, ancestorFilename string) {
+	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid)) + "|" + destIP) {
 		return
 	}
 
 	sev := config.SeverityLow
 	detail := ""
 
-	// Check kernel-emitted lineage
 	if ancestorSuspicious {
 		sev = config.SeverityCritical
 	}
 
 	a := alert.Alert{
 		Severity: string(sev), Action: string(config.ActionAlert),
-		EventType: "CONNECT", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
+		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 		DestIP: destIP, DestPort: destPort, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 	}
 
