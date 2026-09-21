@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"k-guard/internal/alert"
+	"k-guard/internal/audit"
 	"k-guard/internal/config"
 	"k-guard/internal/ebpf"
 	k8s "k-guard/internal/k8s"
@@ -17,24 +18,26 @@ import (
 )
 
 type Engine struct {
-	cfg        *config.Manager
-	guard      *safety.Guard
-	dispatcher *alert.Dispatcher
-	metrics    *metrics.Registry
-	ebpfMgr    *ebpf.Manager
+	cfg         *config.Manager
+	guard       *safety.Guard
+	dispatcher  *alert.Dispatcher
+	metrics     *metrics.Registry
+	ebpfMgr     *ebpf.Manager
+	auditLogger *audit.Logger
 
 	dedup       *Deduper
 	correlator  *Correlator
 	k8sresolver *k8s.Resolver
 }
 
-func NewEngine(cfg *config.Manager, guard *safety.Guard, dispatcher *alert.Dispatcher, m *metrics.Registry, mgr *ebpf.Manager, k8sResolver *k8s.Resolver) *Engine {
+func NewEngine(cfg *config.Manager, guard *safety.Guard, dispatcher *alert.Dispatcher, m *metrics.Registry, mgr *ebpf.Manager, k8sResolver *k8s.Resolver, auditLogger *audit.Logger) *Engine {
 	e := &Engine{
 		cfg:         cfg,
 		guard:       guard,
 		dispatcher:  dispatcher,
 		metrics:     m,
 		ebpfMgr:     mgr,
+		auditLogger: auditLogger,
 		dedup:       NewDeduper(time.Duration(cfg.Current().DedupWindowSeconds) * time.Second),
 		correlator:  NewCorrelator(10 * time.Second),
 		k8sresolver: k8sResolver,
@@ -202,6 +205,15 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			detail = "path truncated during read, match against blocked_paths may be unreliable"
 		}
 
+		e.auditLogger.Log(audit.Record{
+			Decision:  audit.DecisionBlock,
+			EventType: "EXEC_BLOCKED",
+			PID:       pid, PPID: ppid, UID: uid,
+			Comm: comm, CgroupID: cgroupID,
+			Target: filename,
+			Reason: "LSM pre-exec hook blocked binary execution",
+		})
+
 		a := alert.Alert{
 			Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
 			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
@@ -280,6 +292,16 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 				e.metrics.IncKillError()
 			} else {
 				e.metrics.IncKill()
+
+				e.auditLogger.Log(audit.Record{
+					Decision:  audit.DecisionKill,
+					EventType: "EXEC",
+					RuleName:  r.Name,
+					PID:       pid, PPID: ppid, UID: uid,
+					Comm: comm, CgroupID: cgroupID,
+					Target: filename,
+					Reason: "Process killed post-exec via rule action",
+				})
 			}
 			e.dispatcher.Dispatch(e.enrichAlert(a))
 			return
@@ -346,6 +368,16 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 
 func (e *Engine) AnalyzeWriteBlocked(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
 	e.metrics.IncBlock()
+
+	e.auditLogger.Log(audit.Record{
+		Decision:  audit.DecisionBlock,
+		EventType: "WRITE_BLOCKED",
+		PID:       pid, PPID: ppid, UID: uid,
+		Comm: comm, CgroupID: cgroupID,
+		Target: filename,
+		Reason: "Write intent blocked pre-flight by blocked_write_paths policy",
+	})
+
 	detail := "write intent blocked pre-flight by blocked_write_paths policy"
 	if pathTruncated {
 		detail += " | path truncated during read"
@@ -373,6 +405,15 @@ func (e *Engine) AnalyzePtraceBlocked(comm, targetComm string, targetPid, mode, 
 	}
 	e.metrics.IncBlock()
 
+	e.auditLogger.Log(audit.Record{
+		Decision:  audit.DecisionBlock,
+		EventType: "PTRACE_BLOCKED",
+		PID:       pid, PPID: ppid, UID: uid,
+		Comm: comm, CgroupID: cgroupID,
+		Target: targetComm,
+		Reason: fmt.Sprintf("Blocked ptrace request mode=0x%x targeting PID %d", mode, targetPid),
+	})
+
 	detail := fmt.Sprintf("BLOCKED ptrace request mode=0x%x targeting pid=%d (comm='%s')", mode, targetPid, targetComm)
 
 	a := alert.Alert{
@@ -395,6 +436,14 @@ func (e *Engine) AnalyzeKmodBlocked(comm string, pid, ppid, uid, gid uint32, cgr
 		return
 	}
 	e.metrics.IncBlock()
+
+	e.auditLogger.Log(audit.Record{
+		Decision:  audit.DecisionBlock,
+		EventType: "KMOD_BLOCKED",
+		PID:       pid, PPID: ppid, UID: uid,
+		Comm: comm, CgroupID: cgroupID,
+		Reason: "Kernel module load or read blocked by LSM policy",
+	})
 
 	detail := fmt.Sprintf("Kernel module load or read blocked by LSM policy (comm='%s')", comm)
 	if ancestorSuspicious {

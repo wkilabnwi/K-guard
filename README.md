@@ -182,6 +182,7 @@ sinks:
   webhook_url: "https://example.com/hooks/kguard"
   slack_webhook_url: "https://hooks.slack.com/services/..."
   store_path: "/var/lib/kguard/alerts"
+  audit_log_path: "/var/log/kguard/audit.log"
   metrics_listen_addr: ":9090"
   dashboard_listen_addr: ":8080"
 ```
@@ -369,6 +370,27 @@ K-Guard tracks process namespace mutations to detect container breakout techniqu
 Each sink runs on its own bounded queue and delivery goroutine, so a
 slow or stuck sink only drops alerts for itself, it never blocks the
 ring buffer reader or other sinks.
+
+## Production Operational Audit Trail (SOC2 / PCI Compliance)
+
+K-Guard maintains a dedicated, structured **Audit Trail** for every active enforcement decision (`BLOCK`, `KILL`) it executes. This operational record is deliberately separated from the general alert stream: while alerts capture all interesting security telemetry (and may be rate-limited or deduplicated), the audit log is an authoritative, un-deduplicated control log intended for compliance frameworks (SOC2, PCI-DSS, ISO 27001).
+
+### Zero-Overhead Async Architecture
+
+To ensure audit logging never introduces latency into kernel event processing or syscall interception loops, the audit pipeline is built with a zero-allocation, lock-free architecture:
+
+* **Non-Blocking Async Channel Worker:** When an enforcement hook fires, the engine pushes a light struct into a 10,000-element buffered channel and immediately resumes execution. Disk I/O runs entirely on a background goroutine.
+* **Zero-Allocation String Formatting:** Instead of using Go's default `json.Marshal` (which relies on expensive runtime reflection and triggers GC heap allocations), the worker formats NDJSON bytes directly into a reused memory buffer using zero-allocation primitives (`strconv.AppendQuote`, `strconv.AppendUint`).
+* **Batched I/O Flushing:** The background worker writes via a `64KB` `bufio.Writer`, batching up to ~500 enforcement events into a single physical disk write call.
+
+### Schema Example (`NDJSON`)
+
+Log entries are written as Newline-Delimited JSON (NDJSON) to `sinks.audit_log_path` (defaulting to `/var/log/kguard/audit.log`), making them natively ingestible by Datadog, Splunk, Vector, or Elastic:
+
+```json
+{"timestamp":"2026-09-21T20:12:00.123456Z","decision":"BLOCK","event_type":"EXEC_BLOCKED","pid":16274,"ppid":11944,"uid":501,"comm":"nc","cgroup_id":123456,"target":"/usr/bin/nc","reason":"LSM pre-exec hook blocked binary execution"}
+{"timestamp":"2026-09-21T20:15:22.987654Z","decision":"KILL","event_type":"EXEC","rule_name":"block-tmp-exec","pid":18201,"ppid":1402,"uid":0,"comm":"malware","cgroup_id":123456,"target":"/tmp/malware","reason":"Process killed post-exec via rule action"}
+```
 
 ## Dashboard & Metrics
 

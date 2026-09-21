@@ -20,6 +20,7 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 
 	"k-guard/internal/alert"
+	"k-guard/internal/audit"
 	"k-guard/internal/config"
 	"k-guard/internal/dashboard"
 	"k-guard/internal/dashboard/httpauth"
@@ -294,7 +295,19 @@ func main() {
 		log.Printf("[dataset] recording ML telemetry to %s", datasetPath)
 	}
 
-	engine := processor.NewEngine(cfgMgr, guard, dispatcher, metricsRegistry, mgr, k8sResolver)
+	var auditLogger *audit.Logger
+	if cfg.Sinks.AuditLogPath != "" {
+		al, err := audit.NewLogger(cfg.Sinks.AuditLogPath)
+		if err != nil {
+			log.Printf("[main] audit log disabled: %v", err)
+		} else {
+			auditLogger = al
+			defer auditLogger.Close()
+			log.Printf("[audit] recording NDJSON audit trail to %s", cfg.Sinks.AuditLogPath)
+		}
+	}
+
+	engine := processor.NewEngine(cfgMgr, guard, dispatcher, metricsRegistry, mgr, k8sResolver, auditLogger)
 	router := processor.NewRouter(engine, metricsRegistry, cfgMgr, telemetryChan)
 
 	quit := make(chan bool)

@@ -134,6 +134,8 @@ type SinksConfig struct {
 
 	DashboardAuthToken string `yaml:"dashboard_auth_token,omitempty" json:"dashboard_auth_token,omitempty"`
 	MetricsAuthToken   string `yaml:"metrics_auth_token,omitempty" json:"metrics_auth_token,omitempty"`
+
+	AuditLogPath string `json:"audit_log_path" yaml:"audit_log_path"`
 }
 
 type Config struct {

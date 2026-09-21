@@ -97,6 +97,7 @@ dedup_window_seconds: 10
 sinks:
   stdout: true
   syslog: false
+  audit_log_path: "/var/log/kguard/audit.log"
   webhook_url: ""
   store_path: "/var/lib/kguard/"
   metrics_listen_addr: "127.0.0.1:9090"

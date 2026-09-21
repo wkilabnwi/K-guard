@@ -96,7 +96,7 @@ func setupTestEngine(t *testing.T) (*Engine, *MockSink, *config.Manager) {
 	disp.Register(mockSink)
 
 	m := metrics.NewRegistry()
-	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil)
+	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
 
 	return eng, mockSink, cfgMgr
 }
