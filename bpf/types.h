@@ -22,6 +22,7 @@
 #define EVT_BRANCH_MISPREDICT 15
 #define EVT_SENDTO 16
 #define EVT_NS_CHANGE 17
+#define EVT_DNS_ANSWER 18
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -120,7 +121,15 @@ struct ns_change_event {
     __u32 op; // 1 = unshare, 2 = setns
 };
 
+struct dns_answer_event {
+    struct event_hdr hdr;
+    __u32 daddr;     
+    __u8  daddr6[16]; 
+    __u16 family;    
+    char  qname[128];
+};
 
+struct dns_answer_event *unused_dns_answer_event __attribute__((unused));
 struct event_hdr *unused_event_hdr __attribute__((unused));
 struct exec_event *unused_exec_event __attribute__((unused));
 struct connect_event *unused_connect_event __attribute__((unused));
@@ -146,7 +155,7 @@ struct process_lineage {
 struct scratch_buffer {
     char primary[PATH_BUF_SIZE]; // caller's own path buffer (tp_openat/openat2, lsm_bprm_check)
     char walk[PATH_BUF_SIZE];   // path_in_map's private working copy for the prefix walk
-    struct process_lineage lin;  
+    struct process_lineage lin; 
 };
 
 struct exec_scratch {

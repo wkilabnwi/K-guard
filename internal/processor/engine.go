@@ -311,6 +311,10 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 
 }
 
+func (e *Engine) RecordDNSAnswer(cgroupID uint64, ip, domain string) {
+	e.correlator.RecordIPDomain(cgroupID, ip, domain)
+}
+
 // AnalyzeNetworkEgress handles CONNECT and SENDTO egress sensor events, escalating
 // to CRITICAL when kernel lineage marks the process as originating from a suspicious binary.
 func (e *Engine) AnalyzeNetworkEgress(eventType string, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, destIP string, destPort uint16, ancestorSuspicious bool, ancestorFilename string) {
@@ -320,6 +324,16 @@ func (e *Engine) AnalyzeNetworkEgress(eventType string, pid, ppid, uid, gid uint
 
 	sev := config.SeverityLow
 	detail := ""
+
+	if e.correlator != nil {
+		if domain, exact := e.correlator.GetDomainByIP(cgroupID, destIP); domain != "" {
+			if exact {
+				detail = fmt.Sprintf("Resolved domain: %s", domain)
+			} else {
+				detail = fmt.Sprintf("Resolved domain: %s (cross-process match)", domain)
+			}
+		}
+	}
 
 	if ancestorSuspicious {
 		sev = config.SeverityCritical

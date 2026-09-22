@@ -85,6 +85,24 @@ struct {
     __type(value, __u8);                 
 } blocked_prefix SEC(".maps");
 
+struct dns_tx_key {
+    __u32 resolver_ip; // Remote DNS server IP
+    __u16 client_port; // Local ephemeral port
+    __u16 txid;        // 16-bit DNS Transaction ID
+};
+
+struct dns_tx_val {
+    char  qname[128];
+    __u64 cgroup_id;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 8192);
+    __type(key, struct dns_tx_key);
+    __type(value, struct dns_tx_val);
+} dns_pending_tx SEC(".maps");
+
 
 
 volatile __u8 enforcement_enabled SEC(".bss");

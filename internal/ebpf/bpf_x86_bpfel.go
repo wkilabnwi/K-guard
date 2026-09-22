@@ -24,6 +24,29 @@ type BPFConnectEvent struct {
 	_        [4]byte
 }
 
+type BPFDnsAnswerEvent struct {
+	_      structs.HostLayout
+	Hdr    BPFEventHdr
+	Daddr  uint32
+	Daddr6 [16]uint8
+	Family uint16
+	Qname  [128]int8
+	_      [2]byte
+}
+
+type BPFDnsTxKey struct {
+	_          structs.HostLayout
+	ResolverIp uint32
+	ClientPort uint16
+	Txid       uint16
+}
+
+type BPFDnsTxVal struct {
+	_        structs.HostLayout
+	Qname    [128]int8
+	CgroupId uint64
+}
+
 type BPFEventHdr struct {
 	_                  structs.HostLayout
 	TimestampNs        uint64
@@ -152,6 +175,7 @@ const (
 	BPFMapBlockedPrefix            = "blocked_prefix"
 	BPFMapBlockedWritePaths        = "blocked_write_paths"
 	BPFMapContainerCgroups         = "container_cgroups"
+	BPFMapDnsPendingTx             = "dns_pending_tx"
 	BPFMapExecScratchMap           = "exec_scratch_map"
 	BPFMapLineageMap               = "lineage_map"
 	BPFMapProtectedIds             = "protected_ids"
@@ -169,6 +193,8 @@ const (
 	BPFProgLsmPtraceAccessCheck    = "lsm_ptrace_access_check"
 	BPFProgLsmTaskKill             = "lsm_task_kill"
 	BPFProgOnBranchMispredict      = "on_branch_mispredict"
+	BPFProgTcEgressDns             = "tc_egress_dns"
+	BPFProgTcIngressDns            = "tc_ingress_dns"
 	BPFProgTpConnect               = "tp_connect"
 	BPFProgTpExecve                = "tp_execve"
 	BPFProgTpInitModule            = "tp_init_module"
@@ -188,6 +214,7 @@ const (
 	BPFVarPtraceEnforcementEnabled = "ptrace_enforcement_enabled"
 	BPFVarSelfPid                  = "self_pid"
 	BPFVarUnusedConnectEvent       = "unused_connect_event"
+	BPFVarUnusedDnsAnswerEvent     = "unused_dns_answer_event"
 	BPFVarUnusedEventHdr           = "unused_event_hdr"
 	BPFVarUnusedExecEvent          = "unused_exec_event"
 	BPFVarUnusedIouringEvent       = "unused_iouring_event"
@@ -251,6 +278,8 @@ type BPFProgramSpecs struct {
 	LsmPtraceAccessCheck *ebpf.ProgramSpec `ebpf:"lsm_ptrace_access_check"`
 	LsmTaskKill          *ebpf.ProgramSpec `ebpf:"lsm_task_kill"`
 	OnBranchMispredict   *ebpf.ProgramSpec `ebpf:"on_branch_mispredict"`
+	TcEgressDns          *ebpf.ProgramSpec `ebpf:"tc_egress_dns"`
+	TcIngressDns         *ebpf.ProgramSpec `ebpf:"tc_ingress_dns"`
 	TpConnect            *ebpf.ProgramSpec `ebpf:"tp_connect"`
 	TpExecve             *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.ProgramSpec `ebpf:"tp_init_module"`
@@ -276,6 +305,7 @@ type BPFMapSpecs struct {
 	BlockedPrefix         *ebpf.MapSpec `ebpf:"blocked_prefix"`
 	BlockedWritePaths     *ebpf.MapSpec `ebpf:"blocked_write_paths"`
 	ContainerCgroups      *ebpf.MapSpec `ebpf:"container_cgroups"`
+	DnsPendingTx          *ebpf.MapSpec `ebpf:"dns_pending_tx"`
 	ExecScratchMap        *ebpf.MapSpec `ebpf:"exec_scratch_map"`
 	LineageMap            *ebpf.MapSpec `ebpf:"lineage_map"`
 	ProtectedIds          *ebpf.MapSpec `ebpf:"protected_ids"`
@@ -294,6 +324,7 @@ type BPFVariableSpecs struct {
 	PtraceEnforcementEnabled *ebpf.VariableSpec `ebpf:"ptrace_enforcement_enabled"`
 	SelfPid                  *ebpf.VariableSpec `ebpf:"self_pid"`
 	UnusedConnectEvent       *ebpf.VariableSpec `ebpf:"unused_connect_event"`
+	UnusedDnsAnswerEvent     *ebpf.VariableSpec `ebpf:"unused_dns_answer_event"`
 	UnusedEventHdr           *ebpf.VariableSpec `ebpf:"unused_event_hdr"`
 	UnusedExecEvent          *ebpf.VariableSpec `ebpf:"unused_exec_event"`
 	UnusedIouringEvent       *ebpf.VariableSpec `ebpf:"unused_iouring_event"`
@@ -330,6 +361,7 @@ type BPFMaps struct {
 	BlockedPrefix         *ebpf.Map `ebpf:"blocked_prefix"`
 	BlockedWritePaths     *ebpf.Map `ebpf:"blocked_write_paths"`
 	ContainerCgroups      *ebpf.Map `ebpf:"container_cgroups"`
+	DnsPendingTx          *ebpf.Map `ebpf:"dns_pending_tx"`
 	ExecScratchMap        *ebpf.Map `ebpf:"exec_scratch_map"`
 	LineageMap            *ebpf.Map `ebpf:"lineage_map"`
 	ProtectedIds          *ebpf.Map `ebpf:"protected_ids"`
@@ -346,6 +378,7 @@ func (m *BPFMaps) Close() error {
 		m.BlockedPrefix,
 		m.BlockedWritePaths,
 		m.ContainerCgroups,
+		m.DnsPendingTx,
 		m.ExecScratchMap,
 		m.LineageMap,
 		m.ProtectedIds,
@@ -365,6 +398,7 @@ type BPFVariables struct {
 	PtraceEnforcementEnabled *ebpf.Variable `ebpf:"ptrace_enforcement_enabled"`
 	SelfPid                  *ebpf.Variable `ebpf:"self_pid"`
 	UnusedConnectEvent       *ebpf.Variable `ebpf:"unused_connect_event"`
+	UnusedDnsAnswerEvent     *ebpf.Variable `ebpf:"unused_dns_answer_event"`
 	UnusedEventHdr           *ebpf.Variable `ebpf:"unused_event_hdr"`
 	UnusedExecEvent          *ebpf.Variable `ebpf:"unused_exec_event"`
 	UnusedIouringEvent       *ebpf.Variable `ebpf:"unused_iouring_event"`
@@ -390,6 +424,8 @@ type BPFPrograms struct {
 	LsmPtraceAccessCheck *ebpf.Program `ebpf:"lsm_ptrace_access_check"`
 	LsmTaskKill          *ebpf.Program `ebpf:"lsm_task_kill"`
 	OnBranchMispredict   *ebpf.Program `ebpf:"on_branch_mispredict"`
+	TcEgressDns          *ebpf.Program `ebpf:"tc_egress_dns"`
+	TcIngressDns         *ebpf.Program `ebpf:"tc_ingress_dns"`
 	TpConnect            *ebpf.Program `ebpf:"tp_connect"`
 	TpExecve             *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.Program `ebpf:"tp_init_module"`
@@ -418,6 +454,8 @@ func (p *BPFPrograms) Close() error {
 		p.LsmPtraceAccessCheck,
 		p.LsmTaskKill,
 		p.OnBranchMispredict,
+		p.TcEgressDns,
+		p.TcIngressDns,
 		p.TpConnect,
 		p.TpExecve,
 		p.TpInitModule,

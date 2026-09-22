@@ -371,6 +371,27 @@ Each sink runs on its own bounded queue and delivery goroutine, so a
 slow or stuck sink only drops alerts for itself, it never blocks the
 ring buffer reader or other sinks.
 
+## Kernel-Level DNS Interception & IP-to-Domain Correlation
+
+K-Guard intercepts DNS traffic and correlates outbound IP connections (`CONNECT`, `SENDTO`) with resolved domain names in real time without relying on external loggers.
+
+### Why TC (`clsact`) Over Syscall Tracing
+
+Tracing syscalls like `sendto` or `connect` fails to capture all DNS traffic because applications use fragmented socket APIs (`sendmsg`, `write`, `io_uring`), while local resolvers (`systemd-resolved`, `dnsmasq`) decouple the application PID from the upstream query. 
+
+Attaching eBPF classifiers to the Traffic Control (`clsact`) qdisc (`tc_egress_dns` / `tc_ingress_dns`) provides:
+* **100% Packet Coverage:** Captures all UDP/53 traffic at Layer 3/4 across every interface (`eth0`, `veth*`, `lo`) regardless of application runtime or syscall.
+* **Low Overhead:** Code executes strictly on port 53 packets rather than every system socket call.
+* **Deterministic Pairing:** Pairs queries and answers with 100% precision using the 16-bit **DNS Transaction ID (TXID)** and ephemeral client port.
+
+### System Mechanics
+
+1. **Outbound Query Capture (`tc_egress_dns`):** Intercepts egress UDP queries on port 53, extracts the resolver IP, client port, TXID, QNAME, and container `cgroup_id`, storing them in the `dns_pending_tx` LRU map keyed by `(Resolver IP, Client Port, TXID)`.
+2. **Inbound Answer Parsing (`tc_ingress_dns`):** Matches incoming UDP responses on port 53 against `dns_pending_tx`. Parses A (IPv4) or AAAA (IPv6) records, emits an `EVT_DNS_ANSWER` event over the ring buffer, and purges the pending map entry.
+3. **Two-Tiered Correlation Cache:** Userspace maintains an **`ipScoped`** cache (`{cgroup_id, IP}`) for isolated container matching and an **`ipFallback`** cache (`{IP}`) to resolve cross-process lookups from local resolver proxies.
+4. **Alert Enrichment:** Egress network handlers query the correlator by destination IP, enriching alert details automatically.
+
+
 ## Production Operational Audit Trail (SOC2 / PCI Compliance)
 
 K-Guard maintains a dedicated, structured **Audit Trail** for every active enforcement decision (`BLOCK`, `KILL`) it executes. This operational record is deliberately separated from the general alert stream: while alerts capture all interesting security telemetry (and may be rate-limited or deduplicated), the audit log is an authoritative, un-deduplicated control log intended for compliance frameworks (SOC2, PCI-DSS, ISO 27001).

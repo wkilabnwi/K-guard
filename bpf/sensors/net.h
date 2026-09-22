@@ -139,4 +139,188 @@ int tp_sendto(struct syscall_sendto_args *ctx) {
     return 0;
 }
 
+
+
+SEC("tc")
+int tc_egress_dns(struct __sk_buff *skb) {
+    void *data     = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end || eth->h_proto != __builtin_bswap16(0x0800)) 
+        return 0; // TC_ACT_OK
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end || ip->protocol != 17) 
+        return 0;
+
+    __u32 ip_hdr_len = ip->ihl * 4;
+    if (ip_hdr_len < sizeof(struct iphdr) || (void *)ip + ip_hdr_len > data_end) 
+        return 0;
+
+    struct udphdr *udp = (void *)((char *)ip + ip_hdr_len);
+    if ((void *)(udp + 1) > data_end || udp->dest != __builtin_bswap16(53)) 
+        return 0;
+
+    void *dns = (void *)(udp + 1);
+    if (dns + 12 > data_end) return 0;
+
+    __u16 txid = *(__u16 *)dns;
+
+    struct dns_tx_key key = {
+        .resolver_ip = ip->daddr,
+        .client_port = udp->source,
+        .txid        = txid,
+    };
+
+    struct dns_tx_val val = {0};
+    val.cgroup_id = bpf_get_current_cgroup_id();
+    bpf_probe_read_kernel(val.qname, sizeof(val.qname), dns + 12);
+
+    bpf_map_update_elem(&dns_pending_tx, &key, &val, BPF_ANY);
+    return 0;
+}
+
+SEC("tc")
+int tc_ingress_dns(struct __sk_buff *skb) {
+    void *data     = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end || eth->h_proto != __builtin_bswap16(0x0800)) 
+        return 0;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end || ip->protocol != 17) 
+        return 0;
+
+    __u32 ip_hdr_len = ip->ihl * 4;
+    if (ip_hdr_len < sizeof(struct iphdr) || (void *)ip + ip_hdr_len > data_end) 
+        return 0;
+
+    struct udphdr *udp = (void *)((char *)ip + ip_hdr_len);
+    if ((void *)(udp + 1) > data_end || udp->source != __builtin_bswap16(53)) 
+        return 0;
+
+    void *dns = (void *)(udp + 1);
+    if (dns + 12 > data_end) return 0;
+
+    __u16 txid = *(__u16 *)dns;
+    __u8 *hdr_bytes = (__u8 *)dns;
+    __u16 ancount = ((__u16)hdr_bytes[6] << 8) | hdr_bytes[7];
+
+    struct dns_tx_key key = {
+        .resolver_ip = ip->saddr,
+        .client_port = udp->dest,
+        .txid        = txid,
+    };
+
+    struct dns_tx_val *val = bpf_map_lookup_elem(&dns_pending_tx, &key);
+    if (!val) return 0;
+
+    if (ancount == 0) {
+        bpf_map_delete_elem(&dns_pending_tx, &key);
+        return 0;
+    }
+
+    // Skip DNS Question Section (max 16 label jumps)
+    void *qptr = dns + 12;
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        if (qptr + 1 > data_end) { bpf_map_delete_elem(&dns_pending_tx, &key); return 0; }
+        __u8 len = *(__u8 *)qptr;
+        qptr += 1;
+        if (len == 0) break;
+        if ((len & 0xc0) == 0xc0) { qptr += 1; break; }
+        
+        __u32 safe_len = len & 0x3f;
+        if (qptr + safe_len > data_end) { bpf_map_delete_elem(&dns_pending_tx, &key); return 0; }
+        qptr += safe_len;
+    }
+
+    // Skip QTYPE (2) + QCLASS (2)
+    if (qptr + 4 > data_end) {
+        bpf_map_delete_elem(&dns_pending_tx, &key);
+        return 0;
+    }
+    qptr += 4;
+
+    struct dns_answer_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        bpf_map_delete_elem(&dns_pending_tx, &key);
+        return 0;
+    }
+
+    __builtin_memset(&e->hdr, 0, sizeof(e->hdr));
+    e->hdr.timestamp_ns = bpf_ktime_get_ns();
+    e->hdr.event_type = EVT_DNS_ANSWER;
+    e->hdr.cgroup_id = val->cgroup_id;
+
+    e->daddr = 0;
+    __builtin_memset(e->daddr6, 0, sizeof(e->daddr6));
+    e->family = 0;
+    __builtin_memcpy(e->qname, val->qname, sizeof(e->qname));
+
+    // Inspect first 2 Answer Resource Records
+    void *aptr = qptr;
+    #pragma unroll
+    for (int i = 0; i < 2; i++) {
+        if (aptr + 2 > data_end) break;
+
+        __u8 name0 = *(__u8 *)aptr;
+        if ((name0 & 0xc0) == 0xc0) { // Compressed pointer (standard 0xc0xx)
+            aptr += 2;
+        } else {
+            // Uncompressed name label walker
+            #pragma unroll
+            for (int j = 0; j < 8; j++) {
+                if (aptr + 1 > data_end) break;
+                __u8 l = *(__u8 *)aptr;
+                aptr += 1;
+                if (l == 0) break;
+                if ((l & 0xc0) == 0xc0) { aptr += 1; break; }
+                __u32 safe_l = l & 0x3f;
+                if (aptr + safe_l > data_end) break;
+                aptr += safe_l;
+            }
+        }
+
+        if (aptr + 10 > data_end) break;
+
+        __u8 *rrhdr = aptr;
+        __u16 rtype = ((__u16)rrhdr[0] << 8) | rrhdr[1];
+        __u16 rdlen = ((__u16)rrhdr[8] << 8) | rrhdr[9];
+        void *rdata = aptr + 10;
+
+
+        if (rtype == 1 && rdlen == 4) { // A record (IPv4)
+            if (rdata + 4 <= data_end) {
+                e->daddr = *(__u32 *)rdata;
+                e->family = 2;
+                break;
+            }
+        } else if (rtype == 28 && rdlen == 16) { // AAAA record (IPv6)
+            if (rdata + 16 <= data_end) {
+                __builtin_memcpy(e->daddr6, rdata, 16);
+                e->family = 10;
+                break;
+            }
+        }
+
+        __u32 safe_rdlen = rdlen & 0xff;
+        if (rdata + safe_rdlen > data_end) break;
+        aptr = rdata + safe_rdlen;
+    }
+
+    bpf_map_delete_elem(&dns_pending_tx, &key);
+
+    if (e->family == 0) {
+        bpf_ringbuf_discard(e, 0);
+        return 0;
+    }
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
 #endif

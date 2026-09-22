@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"k-guard/internal/trust"
 	"log"
+	"net"
 	"os"
 	"reflect"
 	"runtime"
 	"strings"
 
+	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
 	"github.com/cilium/ebpf"
@@ -17,7 +19,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event -type ns_change_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type dns_answer_event -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event -type ns_change_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -202,6 +204,8 @@ func NewManager() (*Manager, error) {
 			log.Println("[ebpf] LSM bpf_cmd self-defense hook attached.")
 		}
 	}
+
+	m.attachTCDNS()
 
 	if m.Objects.OnBranchMispredict != nil && !hasHardwarePMU() {
 		log.Println("[ebpf] PMU branch-mispredict sensor skipped: no hardware PMU device present no /sys/bus/event_source/devices/cpu*), common under virtualization/colima/cloud VMs that don't expose a vPMU to the guest kernel. Detect-only for this sensor.")
@@ -539,4 +543,81 @@ func (m *Manager) Close() {
 		m.ptraceAllow.Close()
 	}
 	_ = m.Objects.Close()
+}
+
+func (m *Manager) attachTCDNS() {
+	if m.Objects.TcEgressDns == nil || m.Objects.TcIngressDns == nil {
+		return
+	}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		log.Printf("[ebpf] WARNING: failed to list network interfaces for TC attach: %v", err)
+		return
+	}
+
+	attachedCount := 0
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue // Skip down interfaces
+		}
+
+		nlLink, err := netlink.LinkByIndex(iface.Index)
+		if err != nil {
+			continue
+		}
+
+		// Ensure 'clsact' qdisc exists on the interface
+		qdisc := &netlink.GenericQdisc{
+			QdiscAttrs: netlink.QdiscAttrs{
+				LinkIndex: nlLink.Attrs().Index,
+				Handle:    netlink.MakeHandle(0xffff, 0), // clsact handle (ffff:0)
+				Parent:    netlink.HANDLE_CLSACT,
+			},
+			QdiscType: "clsact",
+		}
+
+		_ = netlink.QdiscReplace(qdisc)
+
+		egressFilter := &netlink.BpfFilter{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: nlLink.Attrs().Index,
+				Parent:    netlink.HANDLE_MIN_EGRESS,
+				Handle:    netlink.MakeHandle(0, 1),
+				Protocol:  unix.ETH_P_ALL,
+				Priority:  1,
+			},
+			Fd:           m.Objects.TcEgressDns.FD(),
+			Name:         "tc_egress_dns",
+			DirectAction: true,
+		}
+		if err := netlink.FilterReplace(egressFilter); err == nil {
+			attachedCount++
+		} else {
+			log.Printf("[ebpf] WARNING: failed to attach TC egress filter on %s: %v", iface.Name, err)
+		}
+
+		ingressFilter := &netlink.BpfFilter{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: nlLink.Attrs().Index,
+				Parent:    netlink.HANDLE_MIN_INGRESS,
+				Handle:    netlink.MakeHandle(0, 2),
+				Protocol:  unix.ETH_P_ALL,
+				Priority:  1,
+			},
+			Fd:           m.Objects.TcIngressDns.FD(),
+			Name:         "tc_ingress_dns",
+			DirectAction: true,
+		}
+		if err := netlink.FilterReplace(ingressFilter); err == nil {
+			attachedCount++
+		} else {
+			log.Printf("[ebpf] WARNING: failed to attach TC ingress filter on %s: %v", iface.Name, err)
+		}
+	}
+
+	if attachedCount > 0 {
+		m.activeSensors = append(m.activeSensors, "tc_dns_classifier")
+		log.Printf("[ebpf] TC DNS classifier attached on active network interfaces (%d filters active)", attachedCount)
+	}
 }

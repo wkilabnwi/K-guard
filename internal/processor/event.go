@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 
 	"k-guard/internal/config"
 	kebpf "k-guard/internal/ebpf"
@@ -313,6 +314,34 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
 			hdr.CgroupId, evt.MispredCount, ancestorSuspicious, ancestorFilename,
 		)
+
+	case kebpf.EventDnsAnswer:
+		var evt kebpf.BPFDnsAnswerEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		qname := parseDNSQName(evt.Qname[:])
+		if qname == "" {
+			return
+		}
+
+		var ip string
+		switch evt.Family {
+		case 2:
+			b := make(net.IP, 4)
+			binary.LittleEndian.PutUint32(b, evt.Daddr)
+			ip = b.String()
+		case 10:
+			b := make(net.IP, 16)
+			copy(b, evt.Daddr6[:])
+			ip = b.String()
+		default:
+			return
+		}
+
+		r.engine.RecordDNSAnswer(hdr.CgroupId, ip, qname)
 	}
 
 }
@@ -370,4 +399,34 @@ func parseArgs(bs []int8) string {
 
 func (r *Router) applyConfig(c *config.Config) {
 	r.ignoredConnect.Sync(c.IgnoredConnectComms, "ignored_connect_comms")
+}
+
+func parseDNSQName(raw []int8) string {
+	b := make([]byte, 0, len(raw))
+	for _, v := range raw {
+		if v == 0 {
+			break
+		}
+		b = append(b, byte(v))
+	}
+
+	var labels []string
+	idx := 0
+	for idx < len(b) {
+		length := int(b[idx])
+		if length == 0 {
+			break
+		}
+		if length > 63 || idx+1+length > len(b) {
+			break
+		}
+		label := string(b[idx+1 : idx+1+length])
+		labels = append(labels, label)
+		idx += 1 + length
+	}
+
+	if len(labels) == 0 {
+		return ""
+	}
+	return strings.Join(labels, ".")
 }

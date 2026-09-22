@@ -21,6 +21,7 @@ const (
 	EventBranchMispredict EventType = 15
 	EventSendto           EventType = 16
 	EventNsChange         EventType = 17
+	EventDnsAnswer        EventType = 18
 )
 
 func (t EventType) String() string {
@@ -59,6 +60,8 @@ func (t EventType) String() string {
 		return "SENDTO"
 	case EventNsChange:
 		return "NS_CHANGE"
+	case EventDnsAnswer:
+		return "DNS_ANSWER"
 	default:
 		return "UNKNOWN"
 	}
