@@ -699,3 +699,69 @@ func TestResolveAbsolutePath_EmptyAndAbs(t *testing.T) {
 		t.Errorf("expected absolute path return")
 	}
 }
+
+func TestEngine_AnalyzeExec_MitreMetadata(t *testing.T) {
+	cfgFile, err := os.CreateTemp("", "processor-mitre-cfg-*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp config: %v", err)
+	}
+	defer os.Remove(cfgFile.Name())
+
+	cfgData := `{
+  "version": "1",
+  "dedup_window_seconds": 5,
+  "rules": [
+    {
+      "name": "detect-nc-mitre",
+      "expression": "process.basename == 'nc'",
+      "severity": "high",
+      "action": "ALERT",
+      "mitre": {
+        "tactic": "Command and Control",
+        "technique_id": "T1095",
+        "technique": "Non-Application Layer Protocol"
+      }
+    }
+  ]
+}`
+
+	if _, err := cfgFile.WriteString(cfgData); err != nil {
+		t.Fatalf("failed to write mock config: %v", err)
+	}
+	cfgFile.Close()
+
+	cfgMgr, err := config.NewManager(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("failed to create config manager: %v", err)
+	}
+
+	guard := safety.NewGuard()
+	disp := alert.NewDispatcher()
+	mockSink := &MockSink{}
+	disp.Register(mockSink)
+
+	m := metrics.NewRegistry()
+	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
+
+	eng.AnalyzeExec("nc", "/usr/bin/nc", 701, 1, 1000, 1000, 1, "-e /bin/sh", false, false, "", false, false)
+
+	alerts := waitForAlerts(mockSink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(alerts))
+	}
+
+	a := alerts[0]
+	if a.Mitre == nil {
+		t.Fatalf("expected alert.Mitre to be non-nil")
+	}
+
+	if a.Mitre.TechniqueID != "T1095" {
+		t.Errorf("expected technique_id 'T1095', got %q", a.Mitre.TechniqueID)
+	}
+	if a.Mitre.Tactic != "Command and Control" {
+		t.Errorf("expected tactic 'Command and Control', got %q", a.Mitre.Tactic)
+	}
+	if a.Mitre.Technique != "Non-Application Layer Protocol" {
+		t.Errorf("expected technique 'Non-Application Layer Protocol', got %q", a.Mitre.Technique)
+	}
+}

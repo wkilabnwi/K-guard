@@ -314,3 +314,121 @@ func TestDiffConfig(t *testing.T) {
 		t.Logf("Detected changes:\n%v", changes)
 	}
 }
+
+func TestLoadConfig_MitreMetadata(t *testing.T) {
+	yamlWithMitre := `
+rules:
+  - name: "Block Netcat ATT&CK"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.basename == 'nc'"
+    mitre:
+      tactic: "Command and Control"
+      technique_id: "T1095"
+      technique: "Non-Application Layer Protocol"
+      tags: ["c2", "egress"]
+`
+
+	jsonWithMitre := `{
+  "rules": [
+    {
+      "name": "Block Netcat ATT&CK",
+      "severity": "critical",
+      "action": "BLOCK",
+      "expression": "process.basename == 'nc'",
+      "mitre": {
+        "tactic": "Command and Control",
+        "technique_id": "T1095",
+        "technique": "Non-Application Layer Protocol",
+        "tags": ["c2", "egress"]
+      }
+    }
+  ]
+}`
+
+	tests := []struct {
+		name    string
+		content string
+		ext     string
+	}{
+		{name: "Mitre Metadata in YAML", content: yamlWithMitre, ext: ".yaml"},
+		{name: "Mitre Metadata in JSON", content: jsonWithMitre, ext: ".json"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempConfigExt(t, tt.content, 0600, tt.ext)
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("failed to load config with MITRE metadata: %v", err)
+			}
+
+			if len(cfg.Rules) != 1 {
+				t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+			}
+
+			rule := cfg.Rules[0]
+			if rule.Mitre == nil {
+				t.Fatalf("expected rule.Mitre to be non-nil")
+			}
+
+			if rule.Mitre.Tactic != "Command and Control" {
+				t.Errorf("expected Tactic 'Command and Control', got %q", rule.Mitre.Tactic)
+			}
+			if rule.Mitre.TechniqueID != "T1095" {
+				t.Errorf("expected TechniqueID 'T1095', got %q", rule.Mitre.TechniqueID)
+			}
+			if rule.Mitre.Technique != "Non-Application Layer Protocol" {
+				t.Errorf("expected Technique 'Non-Application Layer Protocol', got %q", rule.Mitre.Technique)
+			}
+			if len(rule.Mitre.Tags) != 2 || rule.Mitre.Tags[0] != "c2" {
+				t.Errorf("unexpected tags in mitre struct: %+v", rule.Mitre.Tags)
+			}
+		})
+	}
+}
+
+func TestDiffConfig_MitreChanges(t *testing.T) {
+	oldCfg := &Config{
+		Rules: []Rule{
+			{
+				Name:       "Rule1",
+				Severity:   SeverityHigh,
+				Action:     ActionAlert,
+				Expression: "true",
+				Mitre: &MitreMeta{
+					Tactic:      "Execution",
+					TechniqueID: "T1059",
+					Technique:   "Command and Scripting Interpreter",
+				},
+			},
+		},
+	}
+
+	newCfg := &Config{
+		Rules: []Rule{
+			{
+				Name:       "Rule1",
+				Severity:   SeverityHigh,
+				Action:     ActionAlert,
+				Expression: "true",
+				Mitre: &MitreMeta{
+					Tactic:      "Execution",
+					TechniqueID: "T1059.004", // Changed sub-technique ID
+					Technique:   "Unix Shell",
+				},
+			},
+		},
+	}
+
+	changes := diffConfig(oldCfg, newCfg)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 diff change for modified MITRE fields, got %d: %v", len(changes), changes)
+	}
+
+	expectedDiff := "rule \"Rule1\" changed expression/action/mitre"
+	if changes[0] != expectedDiff {
+		t.Errorf("expected diff %q, got %q", expectedDiff, changes[0])
+	}
+}

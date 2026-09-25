@@ -205,9 +205,42 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			detail = "path truncated during read, match against blocked_paths may be unreliable"
 		}
 
+		var ruleName string
+		var mitre *config.MitreMeta
+
+		celCtx := config.EventContext{
+			Type:               "EXEC_BLOCKED",
+			AncestorSuspicious: ancestorSuspicious,
+			AncestorFilename:   ancestorFilename,
+			IsSuspiciousPath:   isSuspiciousPath(filename, cfg.SuspiciousPaths),
+			Process: config.ProcessContext{
+				Path:       filename,
+				Basename:   filepath.Base(filename),
+				PID:        int64(pid),
+				PPID:       int64(ppid),
+				UID:        int64(uid),
+				GID:        int64(gid),
+				Comm:       comm,
+				Args:       strings.Fields(args),
+				IsFileless: isFileless,
+			},
+		}
+
+		for _, r := range cfg.Rules {
+			if r.Action == config.ActionBlock {
+				if r.ExactBlockPath == filename || (r.ExactBlockPrefix != "" && strings.HasPrefix(filename, r.ExactBlockPrefix)) || evaluateCEL(r, celCtx) {
+					ruleName = r.Name
+					mitre = r.Mitre
+					break
+				}
+			}
+		}
+
 		e.auditLogger.Log(audit.Record{
 			Decision:  audit.DecisionBlock,
 			EventType: "EXEC_BLOCKED",
+			RuleName:  ruleName,
+			Mitre:     mitre,
 			PID:       pid, PPID: ppid, UID: uid,
 			Comm: comm, CgroupID: cgroupID,
 			Target: filename,
@@ -215,7 +248,8 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 		})
 
 		a := alert.Alert{
-			Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
+			RuleName: ruleName, Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
+			Mitre:   mitre,
 			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
 			CgroupID: cgroupID, Filename: filename, Args: args,
 			AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
@@ -276,6 +310,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 
 		a := alert.Alert{
 			RuleName: r.Name, Severity: string(sev), Action: string(r.Action),
+			Mitre:     r.Mitre,
 			EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
 			Filename: filename, Args: args, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
 			PathTruncated: pathTruncated, Detail: detail,
@@ -297,6 +332,7 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 					Decision:  audit.DecisionKill,
 					EventType: "EXEC",
 					RuleName:  r.Name,
+					Mitre:     r.Mitre,
 					PID:       pid, PPID: ppid, UID: uid,
 					Comm: comm, CgroupID: cgroupID,
 					Target: filename,

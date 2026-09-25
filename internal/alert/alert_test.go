@@ -2,6 +2,7 @@ package alert
 
 import (
 	"encoding/json"
+	"k-guard/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -203,5 +204,51 @@ func TestWebhookSink_Send(t *testing.T) {
 
 	if receivedAlert.Pid != 4321 || receivedAlert.Comm != "nc" {
 		t.Errorf("webhook received incorrect alert payload: %+v", receivedAlert)
+	}
+}
+
+func TestAlert_MitreSerialization(t *testing.T) {
+	testAlert := Alert{
+		RuleName:  "TestMitreRule",
+		Severity:  "critical",
+		Action:    "BLOCK",
+		EventType: "EXEC_BLOCKED",
+		Pid:       8888,
+		Comm:      "nc",
+		Mitre: &config.MitreMeta{
+			Tactic:      "Command and Control",
+			TechniqueID: "T1095",
+			Technique:   "Non-Application Layer Protocol",
+			Tags:        []string{"c2", "egress"},
+		},
+	}
+
+	// Marshal alert to JSON
+	data, err := json.Marshal(testAlert)
+	if err != nil {
+		t.Fatalf("failed to marshal alert with MitreMeta: %v", err)
+	}
+
+	// Unmarshal back to Alert struct
+	var decoded Alert
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal alert JSON: %v", err)
+	}
+
+	if decoded.Mitre == nil {
+		t.Fatalf("expected decoded.Mitre to be non-nil")
+	}
+
+	if decoded.Mitre.TechniqueID != "T1095" {
+		t.Errorf("expected technique_id 'T1095', got %q", decoded.Mitre.TechniqueID)
+	}
+	if decoded.Mitre.Tactic != "Command and Control" {
+		t.Errorf("expected tactic 'Command and Control', got %q", decoded.Mitre.Tactic)
+	}
+	if decoded.Mitre.Technique != "Non-Application Layer Protocol" {
+		t.Errorf("expected technique 'Non-Application Layer Protocol', got %q", decoded.Mitre.Technique)
+	}
+	if len(decoded.Mitre.Tags) != 2 || decoded.Mitre.Tags[0] != "c2" {
+		t.Errorf("unexpected tags in decoded mitre struct: %+v", decoded.Mitre.Tags)
 	}
 }

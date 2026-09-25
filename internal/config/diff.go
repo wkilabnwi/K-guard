@@ -71,8 +71,8 @@ func diffRules(old, new []Rule) []string {
 			changes = append(changes, fmt.Sprintf("rule %q added (%s/%s)", name, nr.Severity, nr.Action))
 			continue
 		}
-		if or.Expression != nr.Expression || or.Severity != nr.Severity || or.Action != nr.Action {
-			changes = append(changes, fmt.Sprintf("rule %q changed expression/action", name))
+		if or.Expression != nr.Expression || or.Severity != nr.Severity || or.Action != nr.Action || !mitreEqual(or.Mitre, nr.Mitre) { // <-- UPDATED LINE
+			changes = append(changes, fmt.Sprintf("rule %q changed expression/action/mitre", name))
 		}
 	}
 	for name := range oldByName {
@@ -195,4 +195,25 @@ func joinComma(parts []string) string {
 		out += p
 	}
 	return out
+}
+
+func mitreEqual(a, b *MitreMeta) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.Tactic != b.Tactic || a.TechniqueID != b.TechniqueID || a.Technique != b.Technique {
+		return false
+	}
+	if len(a.Tags) != len(b.Tags) {
+		return false
+	}
+	for i := range a.Tags {
+		if a.Tags[i] != b.Tags[i] {
+			return false
+		}
+	}
+	return true
 }

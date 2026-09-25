@@ -1,8 +1,14 @@
 rules:
-  - name: "Reverse shell (nc), known path, hard block"
+
+  - name: "test-mitre-nc"
     severity: "critical"
-    action: "BLOCK"
-    expression: "process.path == '/usr/bin/nc'"
+    action: "BLOCK" 
+    expression: "process.path == '/usr/bin/nc.openbsd'"
+    mitre:
+      tactic: "Command and Control"
+      technique_id: "T1095"
+      technique: "Non-Application Layer Protocol"
+      tags: ["test", "c2"]
 
   - name: "Block all binary execution inside /tmp/kguard_prefix/"
     severity: "critical"

@@ -59,10 +59,11 @@ type EventContext struct {
 }
 
 type Rule struct {
-	Name       string   `yaml:"name" json:"name"`
-	Severity   Severity `yaml:"severity" json:"severity"`
-	Action     Action   `yaml:"action" json:"action"`
-	Expression string   `yaml:"expression" json:"expression"`
+	Name       string     `yaml:"name" json:"name"`
+	Severity   Severity   `yaml:"severity" json:"severity"`
+	Action     Action     `yaml:"action" json:"action"`
+	Expression string     `yaml:"expression" json:"expression"`
+	Mitre      *MitreMeta `yaml:"mitre,omitempty" json:"mitre,omitempty"`
 
 	// Pre-compiled CEL program handle
 	Program cel.Program `yaml:"-" json:"-"`

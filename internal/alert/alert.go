@@ -5,6 +5,7 @@ package alert
 
 import (
 	"io"
+	"k-guard/internal/config"
 	"log"
 	"sync"
 	"time"
@@ -15,10 +16,11 @@ import (
 type Alert struct {
 	Timestamp time.Time `json:"timestamp"`
 
-	RuleName string `json:"rule_name,omitempty"` // empty for raw sensor events not tied to a named rule
-	Severity string `json:"severity"`
-	Action   string `json:"action"`
-	Blocked  bool   `json:"blocked"` // true if the LSM hook actually prevented the exec
+	RuleName string            `json:"rule_name,omitempty"` // empty for raw sensor events not tied to a named rule
+	Mitre    *config.MitreMeta `json:"mitre,omitempty"`
+	Severity string            `json:"severity"`
+	Action   string            `json:"action"`
+	Blocked  bool              `json:"blocked"` // true if the LSM hook actually prevented the exec
 
 	EventType string `json:"event_type"`
 

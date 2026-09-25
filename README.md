@@ -218,6 +218,27 @@ When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
 - **Cross-PID In-Memory Cache**: Hashes are resolved to their canonical disk path and cached in a thread-safe in-memory cache. If multiple processes (across hundreds of PIDs) execute the same binary, only the first process triggers disk I/O, subsequent checks hit RAM instantly.
 
+## MITRE ATT&CK Framework Mapping
+
+K-Guard supports native **MITRE ATT&CK** taxonomy tagging inside rules. When rules trigger, threat metadata (tactic, technique ID, technique name, and custom tags) flows directly into all alert outputs and compliance audit logs.
+
+### Mapping MITRE ATT&CK to Rules
+
+Add an optional `mitre` block to any rule definition in **YAML** or **JSON**:
+
+```yaml
+rules:
+  - name: "block-netcat-c2"
+    severity: "critical"
+    action: "BLOCK"
+    expression: "process.path == '/usr/bin/nc.openbsd'"
+    mitre:
+      tactic: "Command and Control"
+      technique_id: "T1095"
+      technique: "Non-Application Layer Protocol"
+      tags: ["c2", "egress"]
+```
+
 ## Config validation
 
 K-Guard refuses to start (or reload) if the config fails validation.

@@ -220,7 +220,7 @@ func NewManager() (*Manager, error) {
 
 		numCPU, cerr := ebpf.PossibleCPU()
 		if cerr != nil {
-			log.Printf("[ebpf] WARNING: could not determine possible CPU count (%v), falling back to runtime.NumCPU() - some CPUs may go unmonitored", cerr)
+			log.Printf("[ebpf] WARNING: could not determine possible CPU count (%v), falling back to runtime.NumCPU(), some CPUs may go unmonitored", cerr)
 			numCPU = runtime.NumCPU()
 		}
 

@@ -28,6 +28,13 @@ var (
 	celOnce sync.Once
 )
 
+type MitreMeta struct {
+	Tactic      string   `json:"tactic,omitempty" yaml:"tactic,omitempty"`
+	TechniqueID string   `json:"technique_id,omitempty" yaml:"technique_id,omitempty"`
+	Technique   string   `json:"technique,omitempty" yaml:"technique,omitempty"`
+	Tags        []string `json:"tags,omitempty" yaml:"tags,omitempty"`
+}
+
 // GetCELEnvironment returns the singleton CEL environment instance
 func GetCELEnvironment() (*cel.Env, error) {
 	var err error

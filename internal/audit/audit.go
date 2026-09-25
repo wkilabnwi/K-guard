@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"k-guard/internal/config"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,7 @@ type Record struct {
 	Decision  Decision
 	EventType string
 	RuleName  string
+	Mitre     *config.MitreMeta
 	PID       uint32
 	PPID      uint32
 	UID       uint32
@@ -97,6 +99,16 @@ func (l *Logger) worker() {
 		if rec.RuleName != "" {
 			buf = append(buf, `,"rule_name":`...)
 			buf = strconv.AppendQuote(buf, rec.RuleName)
+		}
+
+		if rec.Mitre != nil {
+			buf = append(buf, `,"mitre":{"tactic":`...)
+			buf = strconv.AppendQuote(buf, rec.Mitre.Tactic)
+			buf = append(buf, `,"technique_id":`...)
+			buf = strconv.AppendQuote(buf, rec.Mitre.TechniqueID)
+			buf = append(buf, `,"technique":`...)
+			buf = strconv.AppendQuote(buf, rec.Mitre.Technique)
+			buf = append(buf, '}')
 		}
 
 		buf = append(buf, `,"pid":`...)
