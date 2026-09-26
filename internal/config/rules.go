@@ -8,6 +8,18 @@ import (
 	"cel.dev/cel-go/cel"
 )
 
+type RuleMode string
+
+const (
+	RuleModeEnforce RuleMode = "enforce"
+	RuleModeAudit   RuleMode = "audit"
+)
+
+const (
+	BlockModeEnforce uint8 = 1
+	BlockModeAudit   uint8 = 2
+)
+
 type Severity string
 
 const (
@@ -62,6 +74,7 @@ type Rule struct {
 	Name       string     `yaml:"name" json:"name"`
 	Severity   Severity   `yaml:"severity" json:"severity"`
 	Action     Action     `yaml:"action" json:"action"`
+	Mode       RuleMode   `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Expression string     `yaml:"expression" json:"expression"`
 	Mitre      *MitreMeta `yaml:"mitre,omitempty" json:"mitre,omitempty"`
 
@@ -89,6 +102,16 @@ func (r *Rule) Validate(celEnv *cel.Env) error {
 	default:
 		return fmt.Errorf("rule %q: unknown action %q", r.Name, r.Action)
 	}
+
+	if r.Mode == "" {
+		r.Mode = RuleModeEnforce
+	}
+	switch r.Mode {
+	case RuleModeEnforce, RuleModeAudit:
+	default:
+		return fmt.Errorf("rule %q: unknown mode %q (must be 'enforce' or 'audit')", r.Name, r.Mode)
+	}
+
 	if strings.TrimSpace(r.Expression) == "" {
 		return fmt.Errorf("rule %q: empty expression", r.Name)
 	}
@@ -225,21 +248,34 @@ func (c *Config) commLists() map[string][]string {
 	}
 }
 
-func (c *Config) BlockedPatterns() []string {
-	var out []string
+func (c *Config) BlockedPatterns() map[string]uint8 {
+	out := make(map[string]uint8)
 	for _, r := range c.Rules {
 		if r.Action == ActionBlock && r.ExactBlockPath != "" {
-			out = append(out, r.ExactBlockPath)
+			mode := BlockModeEnforce
+			if r.Mode == RuleModeAudit {
+				mode = BlockModeAudit
+			}
+			if existing, exists := out[r.ExactBlockPath]; !exists || existing == BlockModeAudit {
+				out[r.ExactBlockPath] = mode
+			}
 		}
 	}
 	return out
 }
 
-func (c *Config) BlockedPrefix() []string {
-	var out []string
+func (c *Config) BlockedPrefix() map[string]uint8 {
+	out := make(map[string]uint8)
 	for _, r := range c.Rules {
 		if r.Action == ActionBlock && r.ExactBlockPrefix != "" {
-			out = append(out, r.ExactBlockPrefix)
+			mode := BlockModeEnforce
+			if r.Mode == RuleModeAudit {
+				mode = BlockModeAudit
+			}
+			// ENFORCE takes priority over AUDIT if prefixes overlap
+			if existing, exists := out[r.ExactBlockPrefix]; !exists || existing == BlockModeAudit {
+				out[r.ExactBlockPrefix] = mode
+			}
 		}
 	}
 	return out

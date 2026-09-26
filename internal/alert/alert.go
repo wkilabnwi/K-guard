@@ -18,6 +18,7 @@ type Alert struct {
 
 	RuleName string            `json:"rule_name,omitempty"` // empty for raw sensor events not tied to a named rule
 	Mitre    *config.MitreMeta `json:"mitre,omitempty"`
+	Mode     string            `json:"mode,omitempty"`
 	Severity string            `json:"severity"`
 	Action   string            `json:"action"`
 	Blocked  bool              `json:"blocked"` // true if the LSM hook actually prevented the exec

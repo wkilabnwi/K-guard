@@ -408,8 +408,52 @@ func syncTypedMap[K comparable](em *ebpf.Map, items []string, fromString func(st
 	return syncKeyedMap(em, want)
 }
 
-func (m *Manager) SyncBlockedPaths(paths []string) error {
-	return syncPaths(m.Objects.BlockedPaths, paths, false)
+func syncValueMap[K comparable](em *ebpf.Map, want map[K]uint8) error {
+	if em == nil {
+		return nil
+	}
+	existing := make(map[K]uint8)
+	var key K
+	var val uint8
+
+	it := em.Iterate()
+	for it.Next(&key, &val) {
+		existing[key] = val
+	}
+	if err := it.Err(); err != nil {
+		return fmt.Errorf("iterating map: %w", err)
+	}
+
+	for k := range existing {
+		if _, needed := want[k]; !needed {
+			_ = em.Delete(k)
+		}
+	}
+	for k, wantVal := range want {
+		if currentVal, exists := existing[k]; !exists || currentVal != wantVal {
+			if err := em.Update(k, wantVal, ebpf.UpdateAny); err != nil {
+				return fmt.Errorf("updating map: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Manager) SyncBlockedPaths(paths map[string]uint8) error {
+	em := m.Objects.BlockedPaths
+	if em == nil {
+		return nil
+	}
+	want := make(map[[256]byte]uint8, len(paths))
+	for p, mode := range paths {
+		if p == "" {
+			continue
+		}
+		var k [256]byte
+		copy(k[:], p)
+		want[k] = mode
+	}
+	return syncValueMap(em, want)
 }
 
 func (m *Manager) SyncSuspiciousPaths(paths []string) error {
@@ -448,12 +492,19 @@ func makeLpmKey256(prefix string) LpmKey256 {
 	return k
 }
 
-func (m *Manager) SyncPrefixBlocks(prefixes []string) error {
+func (m *Manager) SyncPrefixBlocks(prefixes map[string]uint8) error {
 	em := m.Objects.BlockedPrefix
 	if em == nil {
 		return nil
 	}
-	return syncTypedMap(em, prefixes, makeLpmKey256)
+	want := make(map[LpmKey256]uint8, len(prefixes))
+	for prefix, mode := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		want[makeLpmKey256(prefix)] = mode
+	}
+	return syncValueMap(em, want)
 }
 
 func (m *Manager) AddContainerCgroup(cgroupID uint64) error {

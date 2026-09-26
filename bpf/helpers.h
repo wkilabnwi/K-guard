@@ -174,7 +174,7 @@ static __always_inline int is_prefix_blocked(const char *path) {
     bpf_probe_read_kernel_str(key.basename, sizeof(key.basename), path);
 
     __u8 *val = bpf_map_lookup_elem(&blocked_prefix, &key);
-    return (val && *val == 1) ? 1 : 0;
+    return val ? *val : 0;
 }
 
 

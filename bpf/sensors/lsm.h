@@ -85,14 +85,19 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
 
-    if (blocked && *blocked == 1) {
+    if (blocked && *blocked > 0) {
         emit_exec_event(EVT_EXEC_BLOCKED, path, truncated, 0);
-        return -1;
+        if (*blocked == 1) {
+            return -1; 
+        }
     }
 
-    if (is_prefix_blocked(path)) {
+    int prefix_mode = is_prefix_blocked(path);
+    if (prefix_mode > 0) {
         emit_exec_event(EVT_EXEC_BLOCKED, path, truncated, 0);
-        return -1;
+        if (prefix_mode == 1) {
+            return -1; 
+        }
     }
 
     struct file *file = BPF_CORE_READ(bprm, file);

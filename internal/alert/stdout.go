@@ -24,6 +24,10 @@ func (StdoutSink) Send(a Alert) {
 		fmt.Printf("   | MITRE: [%s] %s (Tactic: %s)\n", a.Mitre.TechniqueID, a.Mitre.Technique, a.Mitre.Tactic)
 	}
 
+	if a.Mode == "audit" {
+		fmt.Printf("   | Mode: AUDIT (Dry-Run / %s action suppressed)\n", a.Action)
+	}
+
 	if a.PodName != "" {
 		fmt.Printf("   | K8s: %s/%s (container: %s, runtime: %s)\n",
 			a.Namespace, a.PodName, a.ContainerID[:12], a.Runtime)

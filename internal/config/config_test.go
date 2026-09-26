@@ -143,8 +143,9 @@ func TestLoadConfig_YAMLAndJSON(t *testing.T) {
 				t.Errorf("expected ExactBlockPath '/usr/bin/nc', got %q", cfg.Rules[0].ExactBlockPath)
 			}
 
+			// Check map lookup and mode (1 = ENFORCE)
 			blocked := cfg.BlockedPatterns()
-			if len(blocked) != 1 || blocked[0] != "/usr/bin/nc" {
+			if mode, exists := blocked["/usr/bin/nc"]; len(blocked) != 1 || !exists || mode != 1 {
 				t.Errorf("unexpected BlockedPatterns output: %v", blocked)
 			}
 		})
@@ -427,8 +428,103 @@ func TestDiffConfig_MitreChanges(t *testing.T) {
 		t.Fatalf("expected 1 diff change for modified MITRE fields, got %d: %v", len(changes), changes)
 	}
 
-	expectedDiff := "rule \"Rule1\" changed expression/action/mitre"
+	expectedDiff := "rule \"Rule1\" changed expression/action/mode/mitre"
 	if changes[0] != expectedDiff {
 		t.Errorf("expected diff %q, got %q", expectedDiff, changes[0])
+	}
+}
+
+func TestRule_AuditModeValidation(t *testing.T) {
+	yamlContent := `
+rules:
+  - name: "Audit Rule"
+    severity: "high"
+    action: "BLOCK"
+    mode: "audit"
+    expression: "process.path == '/usr/bin/nc'"
+  - name: "Enforce Rule"
+    severity: "critical"
+    action: "KILL"
+    mode: "enforce"
+    expression: "process.basename == 'malware'"
+`
+
+	path := writeTempConfig(t, yamlContent, 0600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("failed to load audit mode config: %v", err)
+	}
+
+	if len(cfg.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(cfg.Rules))
+	}
+
+	if cfg.Rules[0].Mode != RuleModeAudit {
+		t.Errorf("expected rule 0 mode 'audit', got %q", cfg.Rules[0].Mode)
+	}
+	if cfg.Rules[1].Mode != RuleModeEnforce {
+		t.Errorf("expected rule 1 mode 'enforce', got %q", cfg.Rules[1].Mode)
+	}
+}
+
+func TestConfig_BlockedPatternsAndPrefixModePrecedence(t *testing.T) {
+	yamlContent := `
+rules:
+  - name: "Audit NC"
+    severity: "high"
+    action: "BLOCK"
+    mode: "audit"
+    expression: "process.path == '/usr/bin/nc'"
+  - name: "Enforce Prefix"
+    severity: "critical"
+    action: "BLOCK"
+    mode: "enforce"
+    expression: "process.path.startsWith('/tmp/bad/')"
+  - name: "Overriding Enforce NC"
+    severity: "critical"
+    action: "BLOCK"
+    mode: "enforce"
+    expression: "process.path == '/usr/bin/nc'"
+`
+
+	path := writeTempConfig(t, yamlContent, 0600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	// ENFORCE (1) must override AUDIT (2) when duplicate paths exist
+	patterns := cfg.BlockedPatterns()
+	if mode, exists := patterns["/usr/bin/nc"]; !exists || mode != BlockModeEnforce {
+		t.Errorf("expected /usr/bin/nc mode to be ENFORCE (1), got mode=%d exists=%v", mode, exists)
+	}
+
+	prefixes := cfg.BlockedPrefix()
+	if mode, exists := prefixes["/tmp/bad/"]; !exists || mode != BlockModeEnforce {
+		t.Errorf("expected /tmp/bad/ prefix mode to be ENFORCE (1), got mode=%d exists=%v", mode, exists)
+	}
+}
+
+func TestDiffConfig_RuleModeChanges(t *testing.T) {
+	oldCfg := &Config{
+		Rules: []Rule{
+			{Name: "Rule1", Severity: SeverityHigh, Action: ActionBlock, Mode: RuleModeAudit, Expression: "true"},
+		},
+	}
+
+	newCfg := &Config{
+		Rules: []Rule{
+			{Name: "Rule1", Severity: SeverityHigh, Action: ActionBlock, Mode: RuleModeEnforce, Expression: "true"},
+		},
+	}
+
+	changes := diffConfig(oldCfg, newCfg)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change for mode toggle, got %d: %v", len(changes), changes)
+	}
+
+	expected := "rule \"Rule1\" changed expression/action/mode/mitre"
+	if changes[0] != expected {
+		t.Errorf("expected diff %q, got %q", expected, changes[0])
 	}
 }

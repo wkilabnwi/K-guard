@@ -90,8 +90,11 @@ func TestNewManager_KernelIntegration(t *testing.T) {
 		t.Errorf("failed to set enforcement: %v", err)
 	}
 
-	// Test map path sync
-	blockedPaths := []string{"/usr/bin/malware", "/tmp/bad_exec"}
+	// Test map path sync (1 = ENFORCE mode)
+	blockedPaths := map[string]uint8{
+		"/usr/bin/malware": 1,
+		"/tmp/bad_exec":    1,
+	}
 	if err := mgr.SyncBlockedPaths(blockedPaths); err != nil {
 		t.Errorf("failed to sync blocked paths: %v", err)
 	}
@@ -100,5 +103,34 @@ func TestNewManager_KernelIntegration(t *testing.T) {
 	sensors := mgr.ActiveSensors()
 	if len(sensors) == 0 {
 		t.Errorf("expected at least 1 active sensor, got 0")
+	}
+}
+
+func TestManager_SyncBlockedPathsAndPrefix_AuditMode(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("skipping integration test: requires root privileges to load eBPF programs")
+	}
+
+	mgr, err := NewManager()
+	if err != nil {
+		t.Fatalf("failed to initialize eBPF Manager: %v", err)
+	}
+	defer mgr.Close()
+
+	// Map paths with explicit mode values: 1 = ENFORCE, 2 = AUDIT
+	blockedPaths := map[string]uint8{
+		"/usr/bin/enforced_binary": 1,
+		"/usr/bin/audited_binary":  2,
+	}
+	if err := mgr.SyncBlockedPaths(blockedPaths); err != nil {
+		t.Errorf("failed to sync mode-aware blocked paths: %v", err)
+	}
+
+	prefixBlocks := map[string]uint8{
+		"/tmp/enforce_dir/": 1,
+		"/tmp/audit_dir/":   2,
+	}
+	if err := mgr.SyncPrefixBlocks(prefixBlocks); err != nil {
+		t.Errorf("failed to sync mode-aware prefix blocks: %v", err)
 	}
 }

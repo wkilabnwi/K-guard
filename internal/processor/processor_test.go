@@ -765,3 +765,121 @@ func TestEngine_AnalyzeExec_MitreMetadata(t *testing.T) {
 		t.Errorf("expected technique 'Non-Application Layer Protocol', got %q", a.Mitre.Technique)
 	}
 }
+
+func TestEngine_AnalyzeExec_AuditModePostExecKillSuppression(t *testing.T) {
+	cfgFile, err := os.CreateTemp("", "processor-audit-cfg-*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp config: %v", err)
+	}
+	defer os.Remove(cfgFile.Name())
+
+	cfgData := `{
+  "version": "1",
+  "dedup_window_seconds": 5,
+  "rules": [
+    {
+      "name": "shadow-kill-nmap",
+      "expression": "process.basename == 'nmap'",
+      "severity": "critical",
+      "action": "KILL",
+      "mode": "audit"
+    }
+  ]
+}`
+
+	if _, err := cfgFile.WriteString(cfgData); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	cfgFile.Close()
+
+	cfgMgr, err := config.NewManager(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("failed to create config manager: %v", err)
+	}
+
+	guard := safety.NewGuard()
+	disp := alert.NewDispatcher()
+	mockSink := &MockSink{}
+	disp.Register(mockSink)
+
+	m := metrics.NewRegistry()
+	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
+
+	// Simulate execution matching the audit-mode kill rule
+	eng.AnalyzeExec("nmap", "/usr/bin/nmap", 801, 1, 1000, 1000, 1, "-sS 192.168.1.1", false, false, "", false, false)
+
+	alerts := waitForAlerts(mockSink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 shadow alert, got %d", len(alerts))
+	}
+
+	a := alerts[0]
+	if a.Mode != "audit" {
+		t.Errorf("expected alert.Mode to be 'audit', got %q", a.Mode)
+	}
+	if a.ResponseErr != "" {
+		t.Errorf("no kill response error should be recorded when kill is suppressed in audit mode")
+	}
+	if !strings.Contains(a.Detail, "[SHADOW MODE]") {
+		t.Errorf("expected detail to contain shadow notification, got %q", a.Detail)
+	}
+}
+
+func TestEngine_AnalyzeExec_AuditModePreExecBlocked(t *testing.T) {
+	cfgFile, err := os.CreateTemp("", "processor-audit-block-cfg-*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp config: %v", err)
+	}
+	defer os.Remove(cfgFile.Name())
+
+	cfgData := `{
+  "version": "1",
+  "dedup_window_seconds": 5,
+  "rules": [
+    {
+      "name": "audit-block-curl",
+      "expression": "process.path == '/usr/bin/curl'",
+      "severity": "high",
+      "action": "BLOCK",
+      "mode": "audit"
+    }
+  ]
+}`
+
+	if _, err := cfgFile.WriteString(cfgData); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	cfgFile.Close()
+
+	cfgMgr, err := config.NewManager(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("failed to create config manager: %v", err)
+	}
+
+	guard := safety.NewGuard()
+	disp := alert.NewDispatcher()
+	mockSink := &MockSink{}
+	disp.Register(mockSink)
+
+	m := metrics.NewRegistry()
+	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
+
+	// Simulate LSM event received when rule was in audit mode
+	eng.AnalyzeExec("curl", "/usr/bin/curl", 802, 1, 1000, 1000, 1, "https://example.com", true, false, "", false, false)
+
+	alerts := waitForAlerts(mockSink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(alerts))
+	}
+
+	a := alerts[0]
+	if a.Blocked {
+		t.Errorf("expected alert.Blocked to be false when rule is in audit mode")
+	}
+	if a.Mode != "audit" {
+		t.Errorf("expected alert.Mode to be 'audit', got %q", a.Mode)
+	}
+	if !strings.Contains(a.Detail, "[SHADOW/AUDIT]") {
+		t.Errorf("expected detail to indicate shadow/audit dry-run match, got %q", a.Detail)
+	}
+}

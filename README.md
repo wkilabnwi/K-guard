@@ -116,6 +116,9 @@ Rules are evaluated using Common Expression Language (CEL), providing flexibilit
   * `ALERT`: Generate alert only.
   * `KILL`: Terminate process post-exec via `pidfd_send_signal`.
   * `BLOCK`: Sync path or prefix to in-kernel LSM map for pre-exec block (falls back to `KILL` for basename matches).
+* **`mode`**:  `enforce` | `audit` (defaults to `enforce` if omitted).
+  * `enforce`: Active enforcement. Pre-exec LSM blocks drop binary execution (`-EPERM`), and post-exec matches terminate the process (`SIGKILL`).
+  * `audit` *(Shadow / Dry-Run)*: Safely tests rules in production. Telemetry, SIEM alerts, and compliance audit log entries are generated, but binary execution is allowed and process kills are suppressed.
 * **`expression`**: CEL expression evaluated against the event context.
 
 ### Example Configurations
@@ -125,11 +128,13 @@ rules:
   - name: "block-netcat"
     severity: "critical"
     action: "BLOCK"
+    mode: "enforce"
     expression: "process.basename == 'nc'"
 
   - name: "tmp-exec"
     severity: "high"
     action: "KILL"
+    mode: "audit"
     expression: "process.path.startsWith('/tmp/') && event.is_suspicious_path"
 
   - name: "known-malware-hash"
@@ -218,6 +223,17 @@ When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
 - **Cross-PID In-Memory Cache**: Hashes are resolved to their canonical disk path and cached in a thread-safe in-memory cache. If multiple processes (across hundreds of PIDs) execute the same binary, only the first process triggers disk I/O, subsequent checks hit RAM instantly.
 
+### Dry-Run / Shadow Mode (`mode: audit`)
+
+To safely test new policies or quantify rule impact in production without risk of breaking services, rules can be run in dry-run mode by setting `mode: audit`:
+
+* **In-Kernel Pre-Exec Blocks (`action: BLOCK`)**:
+  Path and prefix block maps sync enforcement modes (`1 = ENFORCE`, `2 = AUDIT`) directly to the kernel. When a binary execution hits a rule configured in `audit` mode, the `lsm/bprm_check_security` hook emits an `EVT_EXEC_BLOCKED` event over the ring buffer to maintain full SIEM/telemetry visibility, but returns `0` to allow the process to run normally.
+* **Post-Exec Terminations (`action: KILL`)**:
+  When a process matches a `KILL` rule set to `mode: audit`, K-Guard generates an alert marked with `mode: "audit"` and a `[SHADOW MODE]` detail prefix, while suppressing `pidfd_send_signal` execution.
+* **Audit Trail Compliance Visibility**:
+  Shadow matches are recorded in the compliance audit log (`sinks.audit_log_path`) alongside MITRE ATT&CK taxonomy tags, recording the decision and clarifying that enforcement was suppressed due to audit mode.
+
 ## MITRE ATT&CK Framework Mapping
 
 K-Guard supports native **MITRE ATT&CK** taxonomy tagging inside rules. When rules trigger, threat metadata (tactic, technique ID, technique name, and custom tags) flows directly into all alert outputs and compliance audit logs.
@@ -289,9 +305,7 @@ enforcement or add their own binary to the allowlist.
 
 ## Reload diffing
 
-On every hot reload, K-Guard logs what actually changed in the config (rules added/removed/modified,
-allowlist/path/comm list changes, enforcement toggles, etc.) instead of just
-"config reloaded". Auth tokens are never logged, only that they changed.
+On every hot reload, K-Guard logs what actually changed in the config (rules added/removed/modified, rule mode toggles between `enforce` and `audit`, allowlist/path/comm list changes, enforcement toggles, etc.) instead of just "config reloaded". Auth tokens are never logged, only that they changed.
 
 ## Identity-based trust (protected_comms, ignored_connect_comms, allowed_ptrace_attaches)
 

@@ -167,14 +167,9 @@ func isAllowlisted(cfg *config.Config, filename string) bool {
 	return false
 }
 
-// AnalyzeExec is the exec-path rule engine, "blocked" indicates this exec was already
-// prevented pre-flight by the LSM hook (EVT_EXEC_BLOCKED), in that case no
-// KILL is attempted (there is no process to kill; it never ran), but a
-// BLOCK-severity alert is still produced.
+// AnalyzeExec is the exec-path rule engine entry point
 func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, args string, blocked bool, ancestorSuspicious bool, ancestorFilename string, pathTruncated, isFileless bool) {
 	cfg := e.cfg.Current()
-	h := &execHash{pid: pid}
-
 	e.correlator.RecordExec(pid, ppid, comm, filename)
 
 	if isAllowlisted(cfg, filename) {
@@ -182,91 +177,21 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 	}
 
 	if isFileless {
-		filelessDetail := fmt.Sprintf("Fileless execution detected")
-		sev := config.SeverityCritical
-
-		e.metrics.IncRuleHit("FilelessExecution", string(sev), string(config.ActionKill))
-
-		a := alert.Alert{
-			Severity: string(sev), Action: string(config.ActionKill),
-			EventType: "FILELESS_EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-			Filename: filename, Args: args, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-			PathTruncated: pathTruncated, Detail: filelessDetail,
-		}
-
-		e.dispatcher.Dispatch(e.enrichAlert(a))
+		e.handleFilelessExec(comm, filename, args, pid, ppid, uid, gid, cgroupID, ancestorSuspicious, ancestorFilename, pathTruncated)
 		return
 	}
 
 	if blocked {
-		e.metrics.IncBlock()
-		detail := ""
-		if pathTruncated {
-			detail = "path truncated during read, match against blocked_paths may be unreliable"
-		}
-
-		var ruleName string
-		var mitre *config.MitreMeta
-
-		celCtx := config.EventContext{
-			Type:               "EXEC_BLOCKED",
-			AncestorSuspicious: ancestorSuspicious,
-			AncestorFilename:   ancestorFilename,
-			IsSuspiciousPath:   isSuspiciousPath(filename, cfg.SuspiciousPaths),
-			Process: config.ProcessContext{
-				Path:       filename,
-				Basename:   filepath.Base(filename),
-				PID:        int64(pid),
-				PPID:       int64(ppid),
-				UID:        int64(uid),
-				GID:        int64(gid),
-				Comm:       comm,
-				Args:       strings.Fields(args),
-				IsFileless: isFileless,
-			},
-		}
-
-		for _, r := range cfg.Rules {
-			if r.Action == config.ActionBlock {
-				if r.ExactBlockPath == filename || (r.ExactBlockPrefix != "" && strings.HasPrefix(filename, r.ExactBlockPrefix)) || evaluateCEL(r, celCtx) {
-					ruleName = r.Name
-					mitre = r.Mitre
-					break
-				}
-			}
-		}
-
-		e.auditLogger.Log(audit.Record{
-			Decision:  audit.DecisionBlock,
-			EventType: "EXEC_BLOCKED",
-			RuleName:  ruleName,
-			Mitre:     mitre,
-			PID:       pid, PPID: ppid, UID: uid,
-			Comm: comm, CgroupID: cgroupID,
-			Target: filename,
-			Reason: "LSM pre-exec hook blocked binary execution",
-		})
-
-		a := alert.Alert{
-			RuleName: ruleName, Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
-			Mitre:   mitre,
-			Blocked: true, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
-			CgroupID: cgroupID, Filename: filename, Args: args,
-			AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-			PathTruncated: pathTruncated, Detail: detail,
-		}
-
-		e.dispatcher.Dispatch(e.enrichAlert(a))
+		e.handleExecBlocked(cfg, comm, filename, args, pid, ppid, uid, gid, cgroupID, ancestorSuspicious, ancestorFilename, pathTruncated, isFileless)
 		return
 	}
 
 	// Prepare CEL evaluation context payload
+	h := &execHash{pid: pid}
 	shaVal, err := h.get()
 	if err != nil {
 		e.metrics.IncHashCheckError()
 	}
-
-	argList := strings.Fields(args)
 
 	celCtx := config.EventContext{
 		Type:               "EXEC",
@@ -282,69 +207,186 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			UID:        int64(uid),
 			GID:        int64(gid),
 			Comm:       comm,
-			Args:       argList,
+			Args:       strings.Fields(args),
 			IsFileless: isFileless,
 		},
 	}
 
 	for _, r := range cfg.Rules {
-		matched := evaluateCEL(r, celCtx)
-		if !matched {
+		if !evaluateCEL(r, celCtx) {
 			continue
 		}
 
 		if !e.dedup.Allow(r.Name + "|" + strconv.Itoa(int(pid))) {
-			// if the same (Rule,pid) were already alerted within the dedup window, we pass on alerting for this one
 			continue
 		}
 
-		sev := r.Severity
-		detail := ""
-		if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
-			sev = config.SeverityMedium
-		}
-		e.metrics.IncRuleHit(r.Name, string(sev), string(r.Action))
-		if pathTruncated {
-			detail = "path truncated during read, match against configured path lists may be unreliable"
-		}
-
-		a := alert.Alert{
-			RuleName: r.Name, Severity: string(sev), Action: string(r.Action),
-			Mitre:     r.Mitre,
-			EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-			Filename: filename, Args: args, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-			PathTruncated: pathTruncated, Detail: detail,
-		}
-
-		switch r.Action {
-		case config.ActionKill, config.ActionBlock:
-			// A BLOCK-action rule reaching here (post-exec, in the
-			// tracepoint sensor path) means the LSM hook either isn't
-			// active or hadn't synced this pattern yet, prevention
-			// already failed, so KILL is the best remaining response.
-			if err := e.guard.SafeKill(pid, comm); err != nil {
-				a.ResponseErr = err.Error()
-				e.metrics.IncKillError()
-			} else {
-				e.metrics.IncKill()
-
-				e.auditLogger.Log(audit.Record{
-					Decision:  audit.DecisionKill,
-					EventType: "EXEC",
-					RuleName:  r.Name,
-					Mitre:     r.Mitre,
-					PID:       pid, PPID: ppid, UID: uid,
-					Comm: comm, CgroupID: cgroupID,
-					Target: filename,
-					Reason: "Process killed post-exec via rule action",
-				})
-			}
-			e.dispatcher.Dispatch(e.enrichAlert(a))
+		if terminated := e.processExecRuleMatch(r, filename, comm, args, pid, ppid, uid, gid, cgroupID, ancestorSuspicious, ancestorFilename, pathTruncated); terminated {
 			return
 		}
-		e.dispatcher.Dispatch(e.enrichAlert(a))
+	}
+}
+
+// Helper: Handle fileless execution events
+func (e *Engine) handleFilelessExec(comm, filename, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
+	filelessDetail := "Fileless execution detected"
+	sev := config.SeverityCritical
+
+	e.metrics.IncRuleHit("FilelessExecution", string(sev), string(config.ActionKill))
+
+	a := alert.Alert{
+		Severity:           string(sev),
+		Action:             string(config.ActionKill),
+		EventType:          "FILELESS_EXEC",
+		Pid:                pid,
+		Ppid:               ppid,
+		Uid:                uid,
+		Gid:                gid,
+		Comm:               comm,
+		CgroupID:           cgroupID,
+		Filename:           filename,
+		Args:               args,
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		PathTruncated:      pathTruncated,
+		Detail:             filelessDetail,
 	}
 
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+// Helper: Handle pre-flight LSM blocked execution events
+func (e *Engine) handleExecBlocked(cfg *config.Config, comm, filename, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated, isFileless bool) {
+	e.metrics.IncBlock()
+	detail := ""
+	if pathTruncated {
+		detail = "path truncated during read, match against blocked_paths may be unreliable"
+	}
+
+	var ruleName string
+	var mitre *config.MitreMeta
+	var ruleMode config.RuleMode = config.RuleModeEnforce
+
+	celCtx := config.EventContext{
+		Type:               "EXEC_BLOCKED",
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		IsSuspiciousPath:   isSuspiciousPath(filename, cfg.SuspiciousPaths),
+		Process: config.ProcessContext{
+			Path:       filename,
+			Basename:   filepath.Base(filename),
+			PID:        int64(pid),
+			PPID:       int64(ppid),
+			UID:        int64(uid),
+			GID:        int64(gid),
+			Comm:       comm,
+			Args:       strings.Fields(args),
+			IsFileless: isFileless,
+		},
+	}
+
+	for _, r := range cfg.Rules {
+		if r.Action == config.ActionBlock {
+			if r.ExactBlockPath == filename || (r.ExactBlockPrefix != "" && strings.HasPrefix(filename, r.ExactBlockPrefix)) || evaluateCEL(r, celCtx) {
+				ruleName = r.Name
+				mitre = r.Mitre
+				ruleMode = r.Mode
+				break
+			}
+		}
+	}
+
+	isActuallyBlocked := (ruleMode == config.RuleModeEnforce)
+	reason := "LSM pre-exec hook blocked binary execution"
+	if !isActuallyBlocked {
+		reason = "LSM pre-exec hook matched rule in audit mode (execution allowed)"
+		if detail != "" {
+			detail += " | "
+		}
+		detail += "[SHADOW/AUDIT] Pre-exec LSM block dry-run matched (execution allowed)"
+	}
+
+	e.auditLogger.Log(audit.Record{
+		Decision:  audit.DecisionBlock,
+		EventType: "EXEC_BLOCKED",
+		RuleName:  ruleName,
+		Mitre:     mitre,
+		PID:       pid, PPID: ppid, UID: uid,
+		Comm: comm, CgroupID: cgroupID,
+		Target: filename,
+		Reason: reason,
+	})
+
+	a := alert.Alert{
+		RuleName: ruleName, Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
+		Mitre:   mitre,
+		Mode:    string(ruleMode),
+		Blocked: isActuallyBlocked, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
+		CgroupID: cgroupID, Filename: filename, Args: args,
+		AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+		PathTruncated: pathTruncated, Detail: detail,
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+// Helper: Handle matched post-exec rules
+func (e *Engine) processExecRuleMatch(r config.Rule, filename, comm, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) bool {
+	sev := r.Severity
+	detail := ""
+	if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
+		sev = config.SeverityMedium
+	}
+	e.metrics.IncRuleHit(r.Name, string(sev), string(r.Action))
+	if pathTruncated {
+		detail = "path truncated during read, match against configured path lists may be unreliable"
+	}
+
+	a := alert.Alert{
+		RuleName: r.Name, Severity: string(sev), Action: string(r.Action),
+		Mitre:     r.Mitre,
+		Mode:      string(r.Mode),
+		EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
+		Filename: filename, Args: args, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
+		PathTruncated: pathTruncated, Detail: detail,
+	}
+
+	if r.Mode == config.RuleModeAudit {
+		shadowDetail := fmt.Sprintf("[SHADOW MODE] Rule matched dry-run audit mode; %s action suppressed", r.Action)
+		if detail != "" {
+			a.Detail = detail + " | " + shadowDetail
+		} else {
+			a.Detail = shadowDetail
+		}
+		e.dispatcher.Dispatch(e.enrichAlert(a))
+		return false
+	}
+
+	switch r.Action {
+	case config.ActionKill, config.ActionBlock:
+		if err := e.guard.SafeKill(pid, comm); err != nil {
+			a.ResponseErr = err.Error()
+			e.metrics.IncKillError()
+		} else {
+			e.metrics.IncKill()
+
+			e.auditLogger.Log(audit.Record{
+				Decision:  audit.DecisionKill,
+				EventType: "EXEC",
+				RuleName:  r.Name,
+				Mitre:     r.Mitre,
+				PID:       pid, PPID: ppid, UID: uid,
+				Comm: comm, CgroupID: cgroupID,
+				Target: filename,
+				Reason: "Process killed post-exec via rule action",
+			})
+		}
+		e.dispatcher.Dispatch(e.enrichAlert(a))
+		return true
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+	return false
 }
 
 func (e *Engine) RecordDNSAnswer(cgroupID uint64, ip, domain string) {

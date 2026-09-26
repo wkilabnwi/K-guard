@@ -68,11 +68,11 @@ func diffRules(old, new []Rule) []string {
 	for name, nr := range newByName {
 		or, existed := oldByName[name]
 		if !existed {
-			changes = append(changes, fmt.Sprintf("rule %q added (%s/%s)", name, nr.Severity, nr.Action))
+			changes = append(changes, fmt.Sprintf("rule %q added (%s/%s mode=%s)", name, nr.Severity, nr.Action, nr.Mode))
 			continue
 		}
-		if or.Expression != nr.Expression || or.Severity != nr.Severity || or.Action != nr.Action || !mitreEqual(or.Mitre, nr.Mitre) { // <-- UPDATED LINE
-			changes = append(changes, fmt.Sprintf("rule %q changed expression/action/mitre", name))
+		if or.Expression != nr.Expression || or.Severity != nr.Severity || or.Action != nr.Action || or.Mode != nr.Mode || !mitreEqual(or.Mitre, nr.Mitre) {
+			changes = append(changes, fmt.Sprintf("rule %q changed expression/action/mode/mitre", name))
 		}
 	}
 	for name := range oldByName {
@@ -93,6 +93,9 @@ func ruleFieldDiff(old, new Rule) string {
 	}
 	if old.Action != new.Action {
 		parts = append(parts, fmt.Sprintf("action %s -> %s", old.Action, new.Action))
+	}
+	if old.Mode != new.Mode {
+		parts = append(parts, fmt.Sprintf("mode %s -> %s", old.Mode, new.Mode))
 	}
 	return joinComma(parts)
 }
