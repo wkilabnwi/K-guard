@@ -527,6 +527,20 @@ The script unpacks the 56-byte binary structures, aggregates parent-child execut
 
 **Testing the PMU sensor Note** : The `BRANCH_MISPREDICT` sensor can't be exercised end-to-end on most local dev VMs (see above) : `ls /sys/bus/event_source/devices/` for a `cpu*` entry before assuming it's working, and check the startup log for `PMU branch-mispredict sensor` either way. A no-PMU host is expected in plenty of environments, not a bug on its own so the rest of K-Guard runs unaffected.
 
+## Self-Healing & Crash-Loop Protection
+
+K-Guard includes a built-in process supervisor mode to protect against crash loops and ensure system stability:
+
+* **Built-in Supervisor (`--supervisor`)**: Spawns and monitors a child worker process. If an unexpected panic occurs, the supervisor automatically restarts the agent after a brief backoff.
+* **Rate-Limited Fail-Open Safeguard**: If the agent crashes more than 5 times within 5 minutes, the supervisor stops restarting and exits cleanly.
+* **Kernel-Level Fail-Open Guarantee**: When K-Guard exits, the kernel automatically closes open `bpf_link` file descriptors, immediately detaching all LSM hooks and restoring normal kernel behavior without locking or bricking the host.
+
+### Usage
+```bash
+# Run with built-in supervisor protection
+sudo ./k-guard -config /etc/k-guard/config.yaml -supervisor
+```
+
 ## Running
 
 ```

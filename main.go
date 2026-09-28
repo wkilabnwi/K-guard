@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
@@ -110,13 +111,107 @@ func resolveToken(envVar, cfgVal string) string {
 	return cfgVal
 }
 
+func runSupervisor(configPath string) {
+	log.Println("[supervisor] Starting K-Guard supervisor process...")
+
+	const maxRestarts = 5
+	const windowDuration = 5 * time.Minute
+	var restartTimestamps []time.Time
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	for {
+		// Purge timestamps older than the 5 minute window
+		now := time.Now()
+		var validTimestamps []time.Time
+		for _, t := range restartTimestamps {
+			if now.Sub(t) < windowDuration {
+				validTimestamps = append(validTimestamps, t)
+			}
+		}
+		restartTimestamps = validTimestamps
+
+		// Rate-limit check: Fail Open if crashing repeatedly
+		if len(restartTimestamps) >= maxRestarts {
+			log.Fatalf("[EMERGENCY] K-Guard crashed %d times within %v. Exiting supervisor to preserve host stability (failing open).", maxRestarts, windowDuration)
+		}
+
+		args := []string{"-config", configPath, "-child-worker"}
+		cmd := exec.Command(os.Args[0], args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("[supervisor] Failed to start child worker process: %v", err)
+		}
+
+		log.Printf("[supervisor] Spawned worker process (PID: %d)", cmd.Process.Pid)
+
+		childDone := make(chan error, 1)
+		go func() {
+			childDone <- cmd.Wait()
+		}()
+
+		select {
+		case sig := <-sigCh:
+			log.Printf("[supervisor] Received signal %v, forwarding to child (PID: %d)...", sig, cmd.Process.Pid)
+			if sig == syscall.SIGHUP {
+				// Forward SIGHUP for hot-reload without restarting process
+				_ = cmd.Process.Signal(syscall.SIGHUP)
+				continue
+			}
+			// Graceful exit: forward signal and wait for child to unhook eBPF
+			_ = cmd.Process.Signal(sig)
+			<-childDone
+			log.Println("[supervisor] Child process exited cleanly. Supervisor shutting down.")
+			return
+
+		case err := <-childDone:
+			restartTimestamps = append(restartTimestamps, time.Now())
+			if err != nil {
+				log.Printf("[supervisor] WARNING: Worker process (PID %d) exited unexpectedly: %v", cmd.Process.Pid, err)
+			} else {
+				log.Printf("[supervisor] Worker process (PID %d) exited cleanly (status 0)", cmd.Process.Pid)
+				return
+			}
+		}
+
+		time.Sleep(1 * time.Second)
+		log.Println("[supervisor] Restarting worker process...")
+	}
+}
+
+func processRecordSafely(r *processor.Router, raw []byte) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Printf("[EMERGENCY] Recovered from event processing panic: %v", err)
+		}
+	}()
+	r.ProcessRawRecord(raw)
+}
+
 func main() {
 	configPath := flag.String("config", "configs/rules.json", "path to the JSON rule/policy config file")
 	checkOnly := flag.Bool("check", false, "validate the config file and exit (0 = valid, 1 = invalid), no eBPF/kernel interaction")
 	showVersion := flag.Bool("version", false, "print version info and exit")
 	testRuleExpr := flag.String("test-rule", "", "test a CEL expression against a mock JSON event")
 	testRuleEvent := flag.String("test-event", "", "optional JSON string or path to JSON file containing mock event data")
+	supervisorMode := flag.Bool("supervisor", false, "run in supervisor mode with automatic restart and crash-loop protection")
+	childWorker := flag.Bool("child-worker", false, "internal flag: run as supervised worker process")
 	flag.Parse()
+
+	if *supervisorMode {
+		runSupervisor(*configPath)
+		return
+	}
+
+	if *childWorker {
+		log.Println("[worker] Running under K-Guard supervisor protection")
+	} else {
+		log.Println("[worker] Running in standalone mode")
+	}
 
 	if *showVersion {
 		fmt.Printf("k-guard %s\n", buildInfo())
@@ -380,7 +475,7 @@ func main() {
 					continue
 				}
 				health.touch()
-				router.ProcessRawRecord(record.RawSample)
+				processRecordSafely(router, record.RawSample)
 			}
 		}
 	}()
