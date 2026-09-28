@@ -313,14 +313,25 @@ Common gotchas:
   config reload, K-Guard keeps enforcing against the *old* identity
   until the next `SIGHUP`/poll reload re-resolves it, noisier, not
   silently permissive.
+- **Strict parsing.** Unknown keys are rejected in both YAML and JSON, so a
+  typo like `enforcment_enabled` fails at load instead of silently leaving
+  enforcement off.
+- **Config size limit.** Files over 1 MiB, and anything that isn't a regular
+  file (FIFOs, devices), are refused.
+- **BLOCK rules and the kernel.** A `BLOCK` rule is synced to the in-kernel
+  LSM map only if its whole expression is exactly `process.path == '<abs path>'`
+  or `process.path.startsWith('<abs prefix>')`. Any other expression (compound
+  conditions, negation, basename matches) is enforced post-exec via `KILL`,
+  and a log line says so at load time.
+- **Expressions must return bool.**
 
 ## Config file permissions
 
-For the config.json files, K-Guard refuses to read it if :
+K-Guard refuses to read a config file if:
 
-- It is **not** group, or world-writable (`chmod 600` or stricter).
-- It is owned by the UID K-Guard is running as (skipped when running
-  as root).
+- it is group or world-writable (use `chmod 600` or stricter), or
+- it is owned by a different UID than the one K-Guard runs as (skipped when running as root), or
+- it is not a regular file.
 
 A world-writable rules file would let any local user disable
 enforcement or add their own binary to the allowlist.
@@ -611,6 +622,32 @@ sudo go test -v ./internal/ebpf/...
 ```
 
 - Integration tests automatically skip on non-Linux platforms or non-root runners.
+
+### Fuzzing
+
+The config parser, Sigma converter, and CEL expression evaluator are fuzzed
+with Go's native fuzzing, since they process untrusted-ish input (config
+files, imported Sigma rules, rule expressions).
+
+| Target | Package | Covers |
+|---|---|---|
+| `FuzzParseConfig` | `internal/config` | YAML/JSON parsing, defaults, validation, BLOCK path extraction |
+| `FuzzSigma` | `internal/config` | Sigma -> CEL conversion (output must always compile) |
+| `FuzzTestExpression` | `internal/processor` | CEL compile + evaluation against a mock event |
+
+Each target asserts more than "doesn't panic": accepted rules must have a
+compiled program, extracted block paths must be clean, and parsing must
+finish within 500ms.
+
+```bash
+go test -fuzz=FuzzParseConfig -fuzztime=2m ./internal/config/
+go test -fuzz=FuzzSigma -fuzztime=2m ./internal/config/
+go test -fuzz=FuzzTestExpression -fuzztime=2m ./internal/processor/
+```
+
+Only one target can run per `-fuzz` invocation. Add `-parallel=1` on a laptop
+or small VM. Crashing inputs are saved to `testdata/fuzz/<Target>/` and are
+replayed as regression tests by a plain `go test ./...`.
 
 ## License
 

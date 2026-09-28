@@ -7,12 +7,14 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +26,22 @@ import (
 )
 
 var (
+	exactPathRe  = regexp.MustCompile(`^\s*process\.path\s*==\s*(?:'([^'\\]+)'|"([^"\\]+)")\s*$`)
+	prefixPathRe = regexp.MustCompile(`^\s*process\.path\.startsWith\(\s*(?:'([^'\\]+)'|"([^"\\]+)")\s*\)\s*$`)
+)
+
+func firstGroup(m []string) string {
+	for _, g := range m[1:] {
+		if g != "" {
+			return g
+		}
+	}
+	return ""
+}
+
+var (
 	celEnv  *cel.Env
+	celErr  error
 	celOnce sync.Once
 )
 
@@ -37,14 +54,13 @@ type MitreMeta struct {
 
 // GetCELEnvironment returns the singleton CEL environment instance
 func GetCELEnvironment() (*cel.Env, error) {
-	var err error
 	celOnce.Do(func() {
-		celEnv, err = cel.NewEnv(
+		celEnv, celErr = cel.NewEnv(
 			cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 			cel.Variable("process", cel.MapType(cel.StringType, cel.DynType)),
 		)
 	})
-	return celEnv, err
+	return celEnv, celErr
 }
 
 func checkConfigPermissionsFD(f *os.File) error {
@@ -59,6 +75,10 @@ func checkConfigPermissionsFD(f *os.File) error {
 			"run e.g. chmod 600 %s", f.Name(), mode.Perm(), f.Name())
 	}
 
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("refusing to load %s: not a regular file", f.Name())
+	}
+
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		if uid := os.Getuid(); uid != 0 && int(st.Uid) != uid {
 			return fmt.Errorf("refusing to load %s: owned by uid %d, not running uid (%d)", f.Name(), st.Uid, uid)
@@ -67,7 +87,8 @@ func checkConfigPermissionsFD(f *os.File) error {
 	return nil
 }
 
-// Load reads, parses, defaults, and validates a config file in one shot
+const maxConfigBytes = 1 << 20
+
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -79,42 +100,62 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	b, err := io.ReadAll(f)
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
+	if len(b) > maxConfigBytes {
+		return nil, fmt.Errorf("config %s exceeds %d bytes", path, maxConfigBytes)
+	}
 
+	c, err := parseConfig(b, strings.ToLower(filepath.Ext(path)))
+	if err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
+	return c, nil
+}
+
+func parseConfig(b []byte, ext string) (*Config, error) {
 	env, err := GetCELEnvironment()
 	if err != nil {
 		return nil, fmt.Errorf("building CEL env: %w", err)
 	}
 
 	var c Config
-	ext := strings.ToLower(filepath.Ext(path))
-
 	switch ext {
 	case ".json":
-		if err := json.Unmarshal(b, &c); err != nil {
-			return nil, fmt.Errorf("parsing JSON config %s: %w", path, err)
-		}
+		err = decodeJSON(b, &c)
 	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(b, &c); err != nil {
-			return nil, fmt.Errorf("parsing YAML config %s: %w", path, err)
-		}
+		err = decodeYAML(b, &c)
 	default:
-		// Attempt YAML unmarshaling first (yaml.Unmarshal can also parse valid JSON data)
-		if err := yaml.Unmarshal(b, &c); err != nil {
-			if errJSON := json.Unmarshal(b, &c); errJSON != nil {
-				return nil, fmt.Errorf("parsing config %s as YAML (%v) or JSON (%v)", path, err, errJSON)
+		if yerr := decodeYAML(b, &c); yerr != nil {
+			c = Config{}
+			if jerr := decodeJSON(b, &c); jerr != nil {
+				return nil, fmt.Errorf("not valid YAML (%v) or JSON (%v)", yerr, jerr)
 			}
 		}
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	c.applyDefaults()
 	if err := c.Validate(env); err != nil {
-		return nil, fmt.Errorf("invalid config %s: %w", path, err)
+		return nil, fmt.Errorf("invalid: %w", err)
 	}
 	return &c, nil
+}
+
+func decodeJSON(b []byte, c *Config) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	return dec.Decode(c)
+}
+
+func decodeYAML(b []byte, c *Config) error {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	return dec.Decode(c)
 }
 
 type Manager struct {

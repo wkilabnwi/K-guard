@@ -58,7 +58,6 @@ func setupTestEngine(t *testing.T) (*Engine, *MockSink, *config.Manager) {
 	})
 
 	cfgData := `{
-  "version": "1",
   "enforcement_enabled": false,
   "dedup_window_seconds": 5,
   "rules": [
@@ -708,7 +707,6 @@ func TestEngine_AnalyzeExec_MitreMetadata(t *testing.T) {
 	defer os.Remove(cfgFile.Name())
 
 	cfgData := `{
-  "version": "1",
   "dedup_window_seconds": 5,
   "rules": [
     {
@@ -774,7 +772,6 @@ func TestEngine_AnalyzeExec_AuditModePostExecKillSuppression(t *testing.T) {
 	defer os.Remove(cfgFile.Name())
 
 	cfgData := `{
-  "version": "1",
   "dedup_window_seconds": 5,
   "rules": [
     {
@@ -833,7 +830,6 @@ func TestEngine_AnalyzeExec_AuditModePreExecBlocked(t *testing.T) {
 	defer os.Remove(cfgFile.Name())
 
 	cfgData := `{
-  "version": "1",
   "dedup_window_seconds": 5,
   "rules": [
     {

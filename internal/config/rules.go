@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -122,25 +123,32 @@ func (r *Rule) Validate(celEnv *cel.Env) error {
 		return fmt.Errorf("rule %q CEL syntax error: %w", r.Name, issues.Err())
 	}
 
+	if ot := ast.OutputType(); !ot.IsExactType(cel.BoolType) && !ot.IsExactType(cel.DynType) {
+		return fmt.Errorf("rule %q: expression must evaluate to bool, got %s", r.Name, ot)
+	}
+
 	prg, err := celEnv.Program(ast)
 	if err != nil {
 		return fmt.Errorf("rule %q failed to generate CEL program: %w", r.Name, err)
 	}
 	r.Program = prg
 
-	// Helper extract for exact_path matching used by LSM pre-exec block hooks
+	r.ExactBlockPath, r.ExactBlockPrefix = "", ""
 	if r.Action == ActionBlock {
-		if strings.Contains(r.Expression, "process.path ==") {
-			parts := strings.Split(r.Expression, "process.path ==")
-			if len(parts) == 2 {
-				r.ExactBlockPath = strings.Trim(strings.TrimSpace(parts[1]), "\"'`")
+		if m := exactPathRe.FindStringSubmatch(r.Expression); m != nil {
+			p := firstGroup(m)
+			if !filepath.IsAbs(p) {
+				return fmt.Errorf("rule %q: block path %q must be absolute", r.Name, p)
 			}
-		}
-		if strings.Contains(r.Expression, "process.path.startsWith(") {
-			parts := strings.Split(r.Expression, "process.path.startsWith(")
-			if len(parts) == 2 {
-				r.ExactBlockPrefix = strings.Trim(parts[1], ")\"'` ")
+			r.ExactBlockPath = p
+		} else if m := prefixPathRe.FindStringSubmatch(r.Expression); m != nil {
+			p := firstGroup(m)
+			if !filepath.IsAbs(p) || len(p) < 2 {
+				return fmt.Errorf("rule %q: block prefix %q must be an absolute path longer than %q", r.Name, p, "/")
 			}
+			r.ExactBlockPrefix = p
+		} else {
+			log.Printf("[config] rule %q: BLOCK expression is not a simple path match, enforced post-exec (KILL) only", r.Name)
 		}
 	}
 
@@ -208,6 +216,10 @@ func (c *Config) Validate(celEnv *cel.Env) error {
 	}
 	if c.DedupWindowSeconds < 0 {
 		return fmt.Errorf("dedup_window_seconds must be >= 0")
+	}
+
+	if (c.KubeletCertFile == "") != (c.KubeletKeyFile == "") {
+		return fmt.Errorf("kubelet_cert_file and kubelet_key_file must be set together")
 	}
 
 	for field, entries := range c.nonEmptyPathLists() {
