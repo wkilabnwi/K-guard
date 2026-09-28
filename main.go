@@ -200,7 +200,23 @@ func main() {
 	testRuleEvent := flag.String("test-event", "", "optional JSON string or path to JSON file containing mock event data")
 	supervisorMode := flag.Bool("supervisor", false, "run in supervisor mode with automatic restart and crash-loop protection")
 	childWorker := flag.Bool("child-worker", false, "internal flag: run as supervised worker process")
+	convertSigmaPath := flag.String("convert-sigma", "", "path to a Sigma rule YAML file to transpile to K-Guard CEL rule format")
 	flag.Parse()
+
+	if *convertSigmaPath != "" {
+		rule, err := config.ConvertSigmaFile(*convertSigmaPath)
+		if err != nil {
+			log.Fatalf("Sigma conversion error: %v", err)
+		}
+
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(rule); err != nil {
+			log.Fatalf("Failed to encode rule: %v", err)
+		}
+		os.Exit(0)
+	}
 
 	if *supervisorMode {
 		runSupervisor(*configPath)

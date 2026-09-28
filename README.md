@@ -255,6 +255,28 @@ rules:
       tags: ["c2", "egress"]
 ```
 
+## Sigma Rule Transpilation
+
+K-Guard includes a built-in transpiler that converts community [Sigma detection rules](https://github.com/SigmaHQ/sigma) (YAML) into native K-Guard CEL expressions and populates MITRE ATT&CK taxonomy metadata automatically.
+
+### Usage
+
+```bash
+./k-guard -convert-sigma rules/linux/process_creation/proc_creation_lnx_nc.yml
+```
+
+* **Process Creation Taxonomy:**
+  * `Image` -> `process.path`
+  * `OriginalFileName / process.basename` -> `process.basename`
+  * `ParentImage` -> `event.ancestor_filename`
+  * `Hashes.SHA256` -> `process.sha256`
+  * `User` -> `process.uid`
+
+* **Operators:** String modifiers (`|endswith`, `|startswith`, `|contains`) are automatically transpiled into CEL methods (`.endsWith()`, `.startsWith()`, `.contains()`).
+* **ATT&CK TAGS:** Sigma `tags` (e.g. `attack.t1059.004`, `attack.execution`) are extracted directly into K-Guard's native `mitre` metadata block.
+
+> **Note on Scope & Compatibility:** This initial transpiler focuses on Linux process creation and single-event detection rules (`process_creation`). Advanced Sigma constructs, such as multi-event temporal correlations (`near`), complex aggregation pipelines, or userspace log categories (e.g., `systemd journal` or `auth.log` lines) are not yet supported and should be audited manually before deployment. 
+
 ## Config validation
 
 K-Guard refuses to start (or reload) if the config fails validation.
@@ -546,7 +568,7 @@ sudo ./k-guard -config /etc/k-guard/config.yaml -supervisor
 ```
 sudo ./k-guard -config /config/rules.json
 
-Validate a config without touching the kernel:
+# Validate a config without touching the kernel:
 sudo ./k-guard -config /config/rules.json -check
 
 # Test a CEL rule expression against default mock event context
@@ -555,6 +577,9 @@ sudo ./k-guard -config /config/rules.json -check
 # Test a CEL rule against inline JSON or a mock event file
 ./k-guard -test-rule "process.path.startsWith('/tmp/')" -test-event '{"event": {"process": {"path": "/tmp/malware"}}}'
 ./k-guard -test-rule "process.basename == 'nc'" -test-event ./mock_event.json
+
+# Transpile a Linux Sigma YAML rule into K-Guard CEL format
+./k-guard -convert-sigma /path/to/sigma_rule.yml
 
 Print build/version info:
 ./k-guard -version
