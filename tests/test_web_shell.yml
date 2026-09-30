@@ -1,0 +1,19 @@
+title: Web Shell Shell Execution
+id: 12345678-abcd-1234-abcd-123456789abc
+status: experimental
+description: Detects interactive shell execution spawned from common web servers or temp paths
+author: K-Guard Team
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    Image|endswith:
+      - '/nc'
+      - '/bash'
+      - '/sh'
+  condition: selection
+level: high
+tags:
+  - attack.persistence
+  - attack.t1505.003

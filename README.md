@@ -1,5 +1,7 @@
 # K-Guard
 
+[![K-Guard CI/CD Pipeline](https://github.com/wkilabnwi/K-guard/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/wkilabnwi/K-guard/actions/workflows/ci.yml)
+
 K-Guard is a lightweight Linux host intrusion detection and pre-execution *prevention* agent built on eBPF. It monitors security-relevant syscalls and kernel events, evaluates them against a hot-reloadable CEL-based rule engine (supporting both **YAML** and **JSON** formats), and fans matching alerts out to multiple sinks (stdout, syslog, webhook, local JSON-Lines storage, and a read-only web dashboard).
 For any question, feel free to contact louai.sahli1@gmail.com.
 

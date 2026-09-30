@@ -5,7 +5,7 @@ k-guard
 scripts/provision-vm.sh
 test/
 .env
-bpf/include/vmlinux.h
+backup/
 
 #Vendor
 .vscode
