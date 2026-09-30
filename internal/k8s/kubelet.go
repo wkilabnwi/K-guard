@@ -41,8 +41,6 @@ type podList struct {
 type KubeletClient struct {
 	client            *http.Client
 	baseURL           string
-	certFile          string
-	keyFile           string
 	mu                sync.RWMutex
 	podMetaMap        map[string]struct{ Name, Namespace string }
 	containerToPodMap map[string]struct{ Name, Namespace, PodUID, Runtime string }
@@ -92,7 +90,7 @@ func (k *KubeletClient) SyncPods(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("kubelet api returned status: %d", resp.StatusCode)

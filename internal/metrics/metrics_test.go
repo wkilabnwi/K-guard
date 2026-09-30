@@ -105,7 +105,7 @@ func TestMetrics_ExpositionFormattingAndSorting(t *testing.T) {
 		t.Fatalf("missing rule hit metrics in exposition output")
 	}
 
-	if !(ruleAHighIdx < ruleALowIdx && ruleALowIdx < ruleBHighIdx) {
+	if ruleAHighIdx >= ruleALowIdx || ruleALowIdx >= ruleBHighIdx {
 		t.Errorf("rule hits out of order: expected rule_a/HIGH < rule_a/LOW < rule_b/HIGH")
 	}
 }

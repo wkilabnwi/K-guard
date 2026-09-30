@@ -216,7 +216,9 @@ func extractMitreFromTags(tags []string) *MitreMeta {
 		} else if strings.HasPrefix(lower, "attack.") {
 			tactic := strings.TrimPrefix(lower, "attack.")
 			tactic = strings.ReplaceAll(tactic, "_", " ")
-			meta.Tactic = strings.Title(tactic)
+			if len(tactic) > 0 {
+				meta.Tactic = strings.ToUpper(tactic[:1]) + strings.ToLower(tactic[1:])
+			}
 		} else {
 			meta.Tags = append(meta.Tags, tag)
 		}

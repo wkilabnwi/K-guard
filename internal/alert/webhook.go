@@ -58,7 +58,7 @@ func (w *WebhookSink) Send(a Alert) {
 		log.Printf("[webhook] delivery failed: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		log.Printf("[webhook] endpoint returned status %d", resp.StatusCode)
 	}
@@ -111,7 +111,7 @@ func (s *SlackSink) Send(a Alert) {
 		log.Printf("[slack] delivery failed: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		log.Printf("[slack] endpoint returned status %d", resp.StatusCode)

@@ -265,7 +265,7 @@ func (e *Engine) handleExecBlocked(cfg *config.Config, comm, filename, args stri
 
 	var ruleName string
 	var mitre *config.MitreMeta
-	var ruleMode config.RuleMode = config.RuleModeEnforce
+	var ruleMode = config.RuleModeEnforce
 
 	celCtx := config.EventContext{
 		Type:               "EXEC_BLOCKED",

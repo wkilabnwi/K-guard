@@ -94,7 +94,9 @@ func (h *healthState) Handler() http.HandlerFunc {
 			}(),
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -350,7 +352,7 @@ func main() {
 			log.Printf("[main] persistent store disabled: %v", err)
 		} else {
 			dispatcher.Register(store)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 		}
 	}
 
@@ -413,7 +415,7 @@ func main() {
 			log.Printf("[main] audit log disabled: %v", err)
 		} else {
 			auditLogger = al
-			defer auditLogger.Close()
+			defer func() { _ = auditLogger.Close() }()
 			log.Printf("[audit] recording NDJSON audit trail to %s", cfg.Sinks.AuditLogPath)
 		}
 	}
@@ -500,7 +502,7 @@ func main() {
 	log.Println("Shutting down K-Guard")
 
 	close(quit)
-	mgr.Reader.Close()
+	_ = mgr.Reader.Close()
 	wg.Wait()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

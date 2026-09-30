@@ -193,7 +193,7 @@ func TestLogger_ConcurrentLogging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open audit log: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	lines := 0

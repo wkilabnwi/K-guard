@@ -48,7 +48,7 @@ func exeIdentity(pid uint32) (trust.FileID, error) {
 	if err != nil {
 		return trust.FileID{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var st syscall.Stat_t
 	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
 		return trust.FileID{}, err
@@ -98,7 +98,7 @@ func (g *Guard) SafeKill(pid uint32, comm string) error {
 		}
 		return fmt.Errorf("pidfd_open for pid %d failed: %w", pid, err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	if err := unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil {
 		if err == unix.ESRCH {

@@ -45,11 +45,6 @@ type FileID struct {
 	Ino uint64
 }
 
-type pinnedFile struct {
-	f  *os.File
-	id FileID
-}
-
 func NewManager() (*Manager, error) {
 	// Removing the memory limit, standard practice
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -235,12 +230,12 @@ func NewManager() (*Manager, error) {
 
 			if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_SET_BPF, m.Objects.OnBranchMispredict.FD()); err != nil {
 				log.Printf("[ebpf] WARNING: failed to bind PMU sensor program on CPU %d: %v", cpu, err)
-				unix.Close(fd)
+				_ = unix.Close(fd)
 				continue
 			}
 			if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_ENABLE, 0); err != nil {
 				log.Printf("[ebpf] WARNING: failed to enable PMU sensor on CPU %d: %v", cpu, err)
-				unix.Close(fd)
+				_ = unix.Close(fd)
 				continue
 			}
 
@@ -583,11 +578,11 @@ func (m *Manager) RegisterProtectedIDs() error {
 
 func (m *Manager) Close() {
 	if m.Reader != nil {
-		m.Reader.Close()
+		_ = m.Reader.Close()
 	}
 	for _, l := range m.links {
 		if l != nil {
-			l.Close()
+			_ = l.Close()
 		}
 	}
 	if m.ptraceAllow != nil {

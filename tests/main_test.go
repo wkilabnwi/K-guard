@@ -67,7 +67,7 @@ func TestMain_Lifecycle(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://127.0.0.1:19090/metrics", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("expected HTTP 401, got %d", resp.StatusCode)
 		}
@@ -86,7 +86,9 @@ func TestMain_Lifecycle(t *testing.T) {
 
 	select {
 	case <-ctx.Done():
-		cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			t.Logf("warning: failed to kill process: %v", err)
+		}
 		t.Fatalf("process timed out during shutdown")
 	case err := <-done:
 		if err != nil && err.Error() != "exit status 0" {

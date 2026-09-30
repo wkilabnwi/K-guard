@@ -54,7 +54,7 @@ func setupTestEngine(t *testing.T) (*Engine, *MockSink, *config.Manager) {
 	}
 
 	t.Cleanup(func() {
-		os.Remove(cfgFile.Name())
+		_ = os.Remove(cfgFile.Name())
 	})
 
 	cfgData := `{
@@ -82,7 +82,7 @@ func setupTestEngine(t *testing.T) (*Engine, *MockSink, *config.Manager) {
 	if _, err := cfgFile.WriteString(cfgData); err != nil {
 		t.Fatalf("failed to write mock config: %v", err)
 	}
-	cfgFile.Close()
+	_ = cfgFile.Close()
 
 	cfgMgr, err := config.NewManager(cfgFile.Name())
 	if err != nil {
@@ -332,7 +332,7 @@ func TestRouter_AllEvents(t *testing.T) {
 		Daddr:  0x08080808,
 	}
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, connEvt)
+	_ = binary.Write(buf, binary.LittleEndian, connEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	unixEvt := kebpf.BPFConnectEvent{
@@ -341,7 +341,7 @@ func TestRouter_AllEvents(t *testing.T) {
 	}
 	copyInt8(unixEvt.UnixPath[:], "/var/run/test.sock")
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, unixEvt)
+	_ = binary.Write(buf, binary.LittleEndian, unixEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	openEvt := kebpf.BPFOpenEvent{
@@ -349,12 +349,12 @@ func TestRouter_AllEvents(t *testing.T) {
 	}
 	copyInt8(openEvt.Filename[:], "/etc/passwd")
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, openEvt)
+	_ = binary.Write(buf, binary.LittleEndian, openEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	ptraceEvt := makeHdr(kebpf.EventPtrace)
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, ptraceEvt)
+	_ = binary.Write(buf, binary.LittleEndian, ptraceEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	ptraceBlockedEvt := kebpf.BPFPtraceEvent{
@@ -364,14 +364,14 @@ func TestRouter_AllEvents(t *testing.T) {
 	}
 	copyInt8(ptraceBlockedEvt.TargetComm[:], "target")
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, ptraceBlockedEvt)
+	_ = binary.Write(buf, binary.LittleEndian, ptraceBlockedEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	kmodEvt := kebpf.BPFKmodEvent{
 		Hdr: makeHdr(kebpf.EventKmodBlocked),
 	}
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, kmodEvt)
+	_ = binary.Write(buf, binary.LittleEndian, kmodEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	lpeEvt := kebpf.BPFLpeEvent{
@@ -380,7 +380,7 @@ func TestRouter_AllEvents(t *testing.T) {
 		NewUid: 0,
 	}
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, lpeEvt)
+	_ = binary.Write(buf, binary.LittleEndian, lpeEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	pmuEvt := kebpf.BPFPmuEvent{
@@ -388,7 +388,7 @@ func TestRouter_AllEvents(t *testing.T) {
 		MispredCount: 999,
 	}
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, pmuEvt)
+	_ = binary.Write(buf, binary.LittleEndian, pmuEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	alerts := waitForAlerts(sink, 8)
@@ -465,30 +465,30 @@ func TestRouter_OpenEventsAndEdgeCases(t *testing.T) {
 	memfdEvt := kebpf.BPFOpenEvent{Hdr: makeHdr(kebpf.EventMemfd)}
 	copyInt8(memfdEvt.Filename[:], "memfd:test")
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, memfdEvt)
+	_ = binary.Write(buf, binary.LittleEndian, memfdEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	writeEvt := kebpf.BPFOpenEvent{Hdr: makeHdr(kebpf.EventSensitiveWrite)}
 	copyInt8(writeEvt.Filename[:], "/etc/shadow")
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, writeEvt)
+	_ = binary.Write(buf, binary.LittleEndian, writeEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	setuidHdr := makeHdr(kebpf.EventSetuid)
 	setuidHdr.Ret = 0
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, setuidHdr)
+	_ = binary.Write(buf, binary.LittleEndian, setuidHdr)
 	router.ProcessRawRecord(buf.Bytes())
 
 	modHdr := makeHdr(kebpf.EventModuleLoad)
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, modHdr)
+	_ = binary.Write(buf, binary.LittleEndian, modHdr)
 	router.ProcessRawRecord(buf.Bytes())
 
 	wbEvt := kebpf.BPFOpenEvent{Hdr: makeHdr(kebpf.EventWriteBlocked)}
 	copyInt8(wbEvt.Filename[:], "/etc/passwd")
 	buf.Reset()
-	binary.Write(buf, binary.LittleEndian, wbEvt)
+	_ = binary.Write(buf, binary.LittleEndian, wbEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	alerts := waitForAlerts(sink, 5)
@@ -578,7 +578,7 @@ func TestRouter_IPv6Connect(t *testing.T) {
 	v6Evt.Daddr6[15] = 0x01
 
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, v6Evt)
+	_ = binary.Write(buf, binary.LittleEndian, v6Evt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	alerts := waitForAlerts(sink, 1)
@@ -604,7 +604,7 @@ func TestRouter_UnknownAddressFamily(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, unknownEvt)
+	_ = binary.Write(buf, binary.LittleEndian, unknownEvt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	alerts := waitForAlerts(sink, 1)
@@ -666,7 +666,7 @@ func TestRouter_PtraceBlocked_EmptyTargetComm(t *testing.T) {
 	evt := kebpf.BPFPtraceEvent{Hdr: hdr, TargetPid: 5001, Mode: 2}
 
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, evt)
+	_ = binary.Write(buf, binary.LittleEndian, evt)
 	router.ProcessRawRecord(buf.Bytes())
 
 	alerts := waitForAlerts(sink, 1)
@@ -685,7 +685,7 @@ func TestGlobalHashCache_Eviction(t *testing.T) {
 func TestDeduper_ZeroWindow(t *testing.T) {
 	d := NewDeduper(0)
 	// Window <= 0 forces direct return true branch
-	if !d.Allow("any_key") || !d.Allow("any_key") {
+	if !d.Allow("any_key") {
 		t.Errorf("deduper with 0 window should always allow")
 	}
 }
@@ -704,7 +704,7 @@ func TestEngine_AnalyzeExec_MitreMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp config: %v", err)
 	}
-	defer os.Remove(cfgFile.Name())
+	defer func() { _ = os.Remove(cfgFile.Name()) }()
 
 	cfgData := `{
   "dedup_window_seconds": 5,
@@ -726,7 +726,7 @@ func TestEngine_AnalyzeExec_MitreMetadata(t *testing.T) {
 	if _, err := cfgFile.WriteString(cfgData); err != nil {
 		t.Fatalf("failed to write mock config: %v", err)
 	}
-	cfgFile.Close()
+	_ = cfgFile.Close()
 
 	cfgMgr, err := config.NewManager(cfgFile.Name())
 	if err != nil {
@@ -769,7 +769,7 @@ func TestEngine_AnalyzeExec_AuditModePostExecKillSuppression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp config: %v", err)
 	}
-	defer os.Remove(cfgFile.Name())
+	defer func() { _ = os.Remove(cfgFile.Name()) }()
 
 	cfgData := `{
   "dedup_window_seconds": 5,
@@ -787,7 +787,7 @@ func TestEngine_AnalyzeExec_AuditModePostExecKillSuppression(t *testing.T) {
 	if _, err := cfgFile.WriteString(cfgData); err != nil {
 		t.Fatalf("failed to write config: %v", err)
 	}
-	cfgFile.Close()
+	_ = cfgFile.Close()
 
 	cfgMgr, err := config.NewManager(cfgFile.Name())
 	if err != nil {
@@ -827,7 +827,7 @@ func TestEngine_AnalyzeExec_AuditModePreExecBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp config: %v", err)
 	}
-	defer os.Remove(cfgFile.Name())
+	defer func() { _ = os.Remove(cfgFile.Name()) }()
 
 	cfgData := `{
   "dedup_window_seconds": 5,
@@ -845,7 +845,7 @@ func TestEngine_AnalyzeExec_AuditModePreExecBlocked(t *testing.T) {
 	if _, err := cfgFile.WriteString(cfgData); err != nil {
 		t.Fatalf("failed to write config: %v", err)
 	}
-	cfgFile.Close()
+	_ = cfgFile.Close()
 
 	cfgMgr, err := config.NewManager(cfgFile.Name())
 	if err != nil {

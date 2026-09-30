@@ -16,7 +16,7 @@ func createTempFile(t *testing.T) (string, func()) {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	cleanup := func() {
 		_ = os.Remove(path)
@@ -78,7 +78,7 @@ func TestSet_Sync_Symlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open target path: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if !s.Contains(ids[0]) {
 		t.Errorf("expected symlink FileID to match target file identity")

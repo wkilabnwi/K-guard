@@ -88,45 +88,45 @@ func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 
-		fmt.Fprintln(w, "# HELP kguard_events_total Total kernel events observed, by event_type.")
-		fmt.Fprintln(w, "# TYPE kguard_events_total counter")
+		_, _ = fmt.Fprintln(w, "# HELP kguard_events_total Total kernel events observed, by event_type.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_events_total counter")
 		writeLabeled(w, "kguard_events_total", "event_type", r.eventsTotal, &r.eventsMu)
 
-		fmt.Fprintln(w, "# HELP kguard_rule_hits_total Total rule matches, by rule name, severity, and action.")
-		fmt.Fprintln(w, "# TYPE kguard_rule_hits_total counter")
+		_, _ = fmt.Fprintln(w, "# HELP kguard_rule_hits_total Total rule matches, by rule name, severity, and action.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_rule_hits_total counter")
 		r.writeRuleHits(w)
 
-		fmt.Fprintln(w, "# HELP kguard_kills_total Total SIGKILLs issued in response to a KILL-action rule.")
-		fmt.Fprintln(w, "# TYPE kguard_kills_total counter")
-		fmt.Fprintf(w, "kguard_kills_total %d\n", atomic.LoadInt64(&r.killsTotal))
+		_, _ = fmt.Fprintln(w, "# HELP kguard_kills_total Total SIGKILLs issued in response to a KILL-action rule.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_kills_total counter")
+		_, _ = fmt.Fprintf(w, "kguard_kills_total %d\n", atomic.LoadInt64(&r.killsTotal))
 
-		fmt.Fprintln(w, "# HELP kguard_kill_errors_total Total failed kill attempts (protected pid, already exited, permission denied).")
-		fmt.Fprintln(w, "# TYPE kguard_kill_errors_total counter")
-		fmt.Fprintf(w, "kguard_kill_errors_total %d\n", atomic.LoadInt64(&r.killErrorsTotal))
+		_, _ = fmt.Fprintln(w, "# HELP kguard_kill_errors_total Total failed kill attempts (protected pid, already exited, permission denied).")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_kill_errors_total counter")
+		_, _ = fmt.Fprintf(w, "kguard_kill_errors_total %d\n", atomic.LoadInt64(&r.killErrorsTotal))
 
-		fmt.Fprintln(w, "# HELP kguard_blocks_total Total execs actually prevented pre-flight by the LSM hook.")
-		fmt.Fprintln(w, "# TYPE kguard_blocks_total counter")
-		fmt.Fprintf(w, "kguard_blocks_total %d\n", atomic.LoadInt64(&r.blocksTotal))
+		_, _ = fmt.Fprintln(w, "# HELP kguard_blocks_total Total execs actually prevented pre-flight by the LSM hook.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_blocks_total counter")
+		_, _ = fmt.Fprintf(w, "kguard_blocks_total %d\n", atomic.LoadInt64(&r.blocksTotal))
 
-		fmt.Fprintln(w, "# HELP kguard_ringbuf_drops_total Total ring buffer read errors (possible event loss).")
-		fmt.Fprintln(w, "# TYPE kguard_ringbuf_drops_total counter")
-		fmt.Fprintf(w, "kguard_ringbuf_drops_total %d\n", atomic.LoadInt64(&r.ringbufDropsTotal))
+		_, _ = fmt.Fprintln(w, "# HELP kguard_ringbuf_drops_total Total ring buffer read errors (possible event loss).")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_ringbuf_drops_total counter")
+		_, _ = fmt.Fprintf(w, "kguard_ringbuf_drops_total %d\n", atomic.LoadInt64(&r.ringbufDropsTotal))
 
-		fmt.Fprintln(w, "# HELP kguard_sink_errors_total Total alert delivery failures, by sink.")
-		fmt.Fprintln(w, "# TYPE kguard_sink_errors_total counter")
+		_, _ = fmt.Fprintln(w, "# HELP kguard_sink_errors_total Total alert delivery failures, by sink.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_sink_errors_total counter")
 		writeLabeled(w, "kguard_sink_errors_total", "sink", r.sinkErrorsTotal, &r.sinkErrorsMu)
 
-		fmt.Fprintln(w, "# HELP kguard_sink_drops_total Total alerts dropped because a sink's queue was full.")
-		fmt.Fprintln(w, "# TYPE kguard_sink_drops_total counter")
+		_, _ = fmt.Fprintln(w, "# HELP kguard_sink_drops_total Total alerts dropped because a sink's queue was full.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_sink_drops_total counter")
 		writeLabeled(w, "kguard_sink_drops_total", "sink", r.sinkDropsTotal, &r.sinkDropsMu)
 
-		fmt.Fprintln(w, "# HELP kguard_hash_check_errors_total Total SHA256 rule checks that could not be completed (e.g. process exited before the binary could be read).")
-		fmt.Fprintln(w, "# TYPE kguard_hash_check_errors_total counter")
-		fmt.Fprintf(w, "kguard_hash_check_errors_total %d\n", atomic.LoadInt64(&r.hashCheckErrorsTotal))
+		_, _ = fmt.Fprintln(w, "# HELP kguard_hash_check_errors_total Total SHA256 rule checks that could not be completed (e.g. process exited before the binary could be read).")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_hash_check_errors_total counter")
+		_, _ = fmt.Fprintf(w, "kguard_hash_check_errors_total %d\n", atomic.LoadInt64(&r.hashCheckErrorsTotal))
 
-		fmt.Fprintln(w, "# HELP kguard_build_info Always 1, build metadata is in the labels.")
-		fmt.Fprintln(w, "# TYPE kguard_build_info gauge")
-		fmt.Fprintf(w, "kguard_build_info{revision=%q} 1\n", r.buildInfo)
+		_, _ = fmt.Fprintln(w, "# HELP kguard_build_info Always 1, build metadata is in the labels.")
+		_, _ = fmt.Fprintln(w, "# TYPE kguard_build_info gauge")
+		_, _ = fmt.Fprintf(w, "kguard_build_info{revision=%q} 1\n", r.buildInfo)
 	})
 }
 
@@ -144,7 +144,7 @@ func writeLabeled(w http.ResponseWriter, metric, label string, m map[string]*int
 	mu.Unlock()
 
 	for i, k := range keys {
-		fmt.Fprintf(w, "%s{%s=%q} %d\n", metric, label, k, vals[i])
+		_, _ = fmt.Fprintf(w, "%s{%s=%q} %d\n", metric, label, k, vals[i])
 	}
 }
 
@@ -171,7 +171,7 @@ func (r *Registry) writeRuleHits(w http.ResponseWriter) {
 	})
 
 	for _, it := range items {
-		fmt.Fprintf(w, "kguard_rule_hits_total{rule=%q,severity=%q,action=%q} %d\n",
+		_, _ = fmt.Fprintf(w, "kguard_rule_hits_total{rule=%q,severity=%q,action=%q} %d\n",
 			it.key.Rule, it.key.Severity, it.key.Action, it.val)
 	}
 }

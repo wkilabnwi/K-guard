@@ -3,6 +3,7 @@ package audit
 import (
 	"bufio"
 	"k-guard/internal/config"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -80,7 +81,11 @@ func (l *Logger) Log(rec Record) {
 func (l *Logger) worker() {
 	defer close(l.done)
 	w := bufio.NewWriterSize(l.file, 64*1024)
-	defer w.Flush()
+	defer func() {
+		if err := w.Flush(); err != nil {
+			log.Printf("audit: failed to flush writer: %v", err)
+		}
+	}()
 
 	// Pre-allocated scratch buffer reused across all events
 	buf := make([]byte, 0, 512)
@@ -131,7 +136,10 @@ func (l *Logger) worker() {
 		buf = strconv.AppendQuote(buf, rec.Reason)
 		buf = append(buf, "}\n"...)
 
-		w.Write(buf)
+		if _, err := w.Write(buf); err != nil {
+			log.Printf("audit: write failed: %v", err)
+			return
+		}
 	}
 }
 

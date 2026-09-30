@@ -136,7 +136,7 @@ func (h *execHash) get() (string, error) {
 		h.err = fmt.Errorf("opening %s: %w", procPath, err)
 		return "", h.err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {

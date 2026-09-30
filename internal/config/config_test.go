@@ -22,26 +22,6 @@ sinks:
   stdout: true
 `
 
-const updatedYAML = `
-enforcement_enabled: false
-dedup_window_seconds: 10
-protected_pids: [1, 2, 3]
-protected_comms: ["/usr/bin/dockerd"]
-suspicious_path: ["/tmp/evil", "/tmp/malware"]
-rules:
-  - name: "Block netcat"
-    severity: "critical"
-    action: "BLOCK"
-    expression: "process.path == '/usr/bin/nc'"
-  - name: "Alert on nmap"
-    severity: "medium"
-    action: "ALERT"
-    expression: "process.basename == 'nmap'"
-sinks:
-  stdout: false
-  syslog: true
-`
-
 const validJSON = `{
   "enforcement_enabled": true,
   "dedup_window_seconds": 5,
@@ -99,10 +79,10 @@ func writeTempConfigExt(t *testing.T, content string, mode os.FileMode, ext stri
 	if _, err := tmpFile.WriteString(content); err != nil {
 		t.Fatalf("failed to write content: %v", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	t.Cleanup(func() {
-		os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name())
 	})
 	return tmpFile.Name()
 }
@@ -428,7 +408,7 @@ func TestDiffConfig_MitreChanges(t *testing.T) {
 		t.Fatalf("expected 1 diff change for modified MITRE fields, got %d: %v", len(changes), changes)
 	}
 
-	expectedDiff := "rule \"Rule1\" changed expression/action/mode/mitre"
+	expectedDiff := "rule \"Rule1\" changed MITRE metadata"
 	if changes[0] != expectedDiff {
 		t.Errorf("expected diff %q, got %q", expectedDiff, changes[0])
 	}
@@ -523,7 +503,7 @@ func TestDiffConfig_RuleModeChanges(t *testing.T) {
 		t.Fatalf("expected 1 change for mode toggle, got %d: %v", len(changes), changes)
 	}
 
-	expected := "rule \"Rule1\" changed expression/action/mode/mitre"
+	expected := "rule \"Rule1\" changed (mode audit -> enforce)"
 	if changes[0] != expected {
 		t.Errorf("expected diff %q, got %q", expected, changes[0])
 	}

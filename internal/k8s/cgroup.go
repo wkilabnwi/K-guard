@@ -58,7 +58,7 @@ func (r *Resolver) getCgroupPathFromProc(pid uint32) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var fallbackCandidate string
 	scanner := bufio.NewScanner(f)

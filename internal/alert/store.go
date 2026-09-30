@@ -50,7 +50,9 @@ func (s *Store) rotateIfNeeded() error {
 		return nil
 	}
 	if s.f != nil {
-		s.f.Close()
+		if err := s.f.Close(); err != nil {
+			log.Printf("alert: failed closing alert store file: %v", err)
+		}
 	}
 	f, err := os.OpenFile(s.pathFor(today), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 	if err != nil {
@@ -143,7 +145,7 @@ func readAlertsFile(path string) ([]Alert, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var all []Alert
 	sc := bufio.NewScanner(f)

@@ -155,5 +155,7 @@ func (s *Server) handleTestRule(w http.ResponseWriter, r *http.Request) {
 	result := processor.TestExpression(celEnv, req.Expression, mockData)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

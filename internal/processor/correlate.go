@@ -103,7 +103,7 @@ func (c *Correlator) FormatTree(startPid uint32) string {
 			name = n.Comm
 		}
 
-		sb.WriteString(fmt.Sprintf("\n       %s [PID %d] %s", prefix, n.Pid, name))
+		fmt.Fprintf(&sb, "\n       %s [PID %d] %s", prefix, n.Pid, name)
 	}
 
 	return sb.String()

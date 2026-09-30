@@ -72,7 +72,12 @@ func diffRules(old, new []Rule) []string {
 			continue
 		}
 		if or.Expression != nr.Expression || or.Severity != nr.Severity || or.Action != nr.Action || or.Mode != nr.Mode || !mitreEqual(or.Mitre, nr.Mitre) {
-			changes = append(changes, fmt.Sprintf("rule %q changed expression/action/mode/mitre", name))
+			details := ruleFieldDiff(or, nr)
+			if details != "" {
+				changes = append(changes, fmt.Sprintf("rule %q changed (%s)", name, details))
+			} else {
+				changes = append(changes, fmt.Sprintf("rule %q changed MITRE metadata", name))
+			}
 		}
 	}
 	for name := range oldByName {

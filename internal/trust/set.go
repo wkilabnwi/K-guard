@@ -63,7 +63,7 @@ func (s *Set) Sync(paths []string, label string) []FileID {
 		}
 		id, err := statFD(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			log.Printf("[trust] %s: fstat %q failed, skipping: %v", label, p, err)
 			continue
 		}
@@ -72,7 +72,9 @@ func (s *Set) Sync(paths []string, label string) []FileID {
 
 	for p, pf := range s.pinned {
 		if !want[p] {
-			pf.f.Close()
+			if err := pf.f.Close(); err != nil {
+				log.Printf("trust: failed closing file: %v", err)
+			}
 			delete(s.pinned, p)
 		}
 	}
@@ -100,6 +102,8 @@ func (s *Set) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, pf := range s.pinned {
-		pf.f.Close()
+		if err := pf.f.Close(); err != nil {
+			log.Printf("trust: error closing file: %v", err)
+		}
 	}
 }
