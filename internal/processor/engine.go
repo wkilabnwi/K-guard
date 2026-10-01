@@ -656,6 +656,62 @@ func (e *Engine) AnalyzeNsChange(pid, ppid, uid, gid uint32, comm string, cgroup
 	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
+func (e *Engine) AnalyzeReverseShell(comm, filename, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string) {
+	cfg := e.cfg.Current()
+	enforced := cfg.EnforcementEnabled && e.ebpfMgr.LSMEnabled
+
+	e.metrics.IncBlock()
+
+	detail := "Reverse-shell vector detected: network socket redirected to standard I/O (fd 0/1/2) prior to shell execution"
+
+	act := config.ActionKill
+	if enforced {
+		act = config.ActionBlock
+	}
+
+	a := alert.Alert{
+		Severity:  string(config.SeverityCritical),
+		Action:    string(act),
+		Blocked:   enforced,
+		EventType: "REVERSE_SHELL",
+		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
+		Comm: comm, CgroupID: cgroupID, Filename: filename, Args: args,
+		AncestorSuspicious: ancestorSuspicious,
+		AncestorFilename:   ancestorFilename,
+		Detail:             detail,
+	}
+
+	if enforced {
+		a.Detail += " [LSM Pre-flight Blocked]"
+		e.auditLogger.Log(audit.Record{
+			Decision:  audit.DecisionBlock,
+			EventType: "REVERSE_SHELL",
+			PID:       pid, PPID: ppid, UID: uid,
+			Comm: comm, CgroupID: cgroupID,
+			Target: filename,
+			Reason: detail + " (LSM Pre-flight Blocked)",
+		})
+	} else {
+		e.auditLogger.Log(audit.Record{
+			Decision:  audit.DecisionKill,
+			EventType: "REVERSE_SHELL",
+			PID:       pid, PPID: ppid, UID: uid,
+			Comm: comm, CgroupID: cgroupID,
+			Target: filename,
+			Reason: detail + " (Post-exec SIGKILL)",
+		})
+
+		if err := e.guard.SafeKill(pid, comm); err != nil {
+			a.ResponseErr = err.Error()
+			e.metrics.IncKillError()
+		} else {
+			e.metrics.IncKill()
+		}
+	}
+
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
 // enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
 // at the next refactor this function will do the work of enriching all alerts not only the k8s context
 func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {

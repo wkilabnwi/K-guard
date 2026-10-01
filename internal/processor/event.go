@@ -342,6 +342,25 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		}
 
 		r.engine.RecordDNSAnswer(hdr.CgroupId, ip, qname)
+
+	case kebpf.EventReverseShell:
+		var evt kebpf.BPFExecEvent
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+			r.metrics.IncRingbufDrop()
+			return
+		}
+
+		uncleanfilename := int8ToString(evt.Filename[:])
+		filename := resolveAbsolutePath(hdr.Pid, uncleanfilename)
+		if filename == "" {
+			filename = "UNKNOWN_OR_EMPTY"
+		}
+		args := parseArgs(evt.Args[:])
+
+		r.engine.AnalyzeReverseShell(
+			comm, filename, args, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
+			hdr.CgroupId, ancestorSuspicious, ancestorFilename,
+		)
 	}
 
 }

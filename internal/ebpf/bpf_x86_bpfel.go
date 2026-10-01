@@ -146,7 +146,8 @@ type BPFProcessLineage struct {
 	ExpectedUid        uint32
 	SetuidAllowed      uint8
 	SuspiciousAncestor uint8
-	Pad                [2]uint8
+	SocketRedirected   uint8
+	Pad                [1]uint8
 	AncestorFilename   [256]int8
 }
 
@@ -196,6 +197,8 @@ const (
 	BPFProgTcEgressDns             = "tc_egress_dns"
 	BPFProgTcIngressDns            = "tc_ingress_dns"
 	BPFProgTpConnect               = "tp_connect"
+	BPFProgTpDup2                  = "tp_dup2"
+	BPFProgTpDup3                  = "tp_dup3"
 	BPFProgTpExecve                = "tp_execve"
 	BPFProgTpInitModule            = "tp_init_module"
 	BPFProgTpIoUringSubmitReq      = "tp_io_uring_submit_req"
@@ -281,6 +284,8 @@ type BPFProgramSpecs struct {
 	TcEgressDns          *ebpf.ProgramSpec `ebpf:"tc_egress_dns"`
 	TcIngressDns         *ebpf.ProgramSpec `ebpf:"tc_ingress_dns"`
 	TpConnect            *ebpf.ProgramSpec `ebpf:"tp_connect"`
+	TpDup2               *ebpf.ProgramSpec `ebpf:"tp_dup2"`
+	TpDup3               *ebpf.ProgramSpec `ebpf:"tp_dup3"`
 	TpExecve             *ebpf.ProgramSpec `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.ProgramSpec `ebpf:"tp_init_module"`
 	TpIoUringSubmitReq   *ebpf.ProgramSpec `ebpf:"tp_io_uring_submit_req"`
@@ -427,6 +432,8 @@ type BPFPrograms struct {
 	TcEgressDns          *ebpf.Program `ebpf:"tc_egress_dns"`
 	TcIngressDns         *ebpf.Program `ebpf:"tc_ingress_dns"`
 	TpConnect            *ebpf.Program `ebpf:"tp_connect"`
+	TpDup2               *ebpf.Program `ebpf:"tp_dup2"`
+	TpDup3               *ebpf.Program `ebpf:"tp_dup3"`
 	TpExecve             *ebpf.Program `ebpf:"tp_execve"`
 	TpInitModule         *ebpf.Program `ebpf:"tp_init_module"`
 	TpIoUringSubmitReq   *ebpf.Program `ebpf:"tp_io_uring_submit_req"`
@@ -457,6 +464,8 @@ func (p *BPFPrograms) Close() error {
 		p.TcEgressDns,
 		p.TcIngressDns,
 		p.TpConnect,
+		p.TpDup2,
+		p.TpDup3,
 		p.TpExecve,
 		p.TpInitModule,
 		p.TpIoUringSubmitReq,

@@ -37,6 +37,7 @@ it, a BPF LSM hook:
 | `TASK_KILL_BLOCKED` | `lsm/task_kill` | Self-protection: pre-emptively blocks external processes from sending termination signals to K-Guard |
 | `BPF_CMD_BLOCKED` | `lsm/bpf` | Self-protection: blocks unauthorized processes from inspecting or detaching K-Guard eBPF maps/programs |
 | `BRANCH_MISPREDICT` | `perf_event` (`PERF_TYPE_HARDWARE`, `PERF_COUNT_HW_BRANCH_MISSES`) | Hardware PMU counter, not a syscall/LSM hook. One `perf_event` per possible CPU, sampled every 10k mispredicted branches.|
+| `REVERSE_SHELL` | `sys_enter_dup2`, `sys_enter_dup3` + `lsm/bprm_check_security` | Pre-exec: detects socket redirectionm and drops execution (`-EPERM`). |
 
 ### Hardware PMU sensor (branch mispredictions)
  
@@ -92,6 +93,7 @@ a given deployment.
   - **Agent Self-Protection**:
     - `lsm/task_kill` intercepts termination signals targeted at K-Guard's PID and rejects them (`-EPERM`) unless sent by K-Guard itself or PID 1.
     - `lsm/bpf` restricts critical eBPF system calls (`BPF_LINK_DETACH`, `BPF_MAP_GET_FD_BY_ID`, `BPF_PROG_GET_FD_BY_ID`, etc.) to prevent hostile processes from detaching or inspecting K-Guard's in-kernel security filters. On startup, K-Guard uses Go reflection (`reflect`) to inspect the `bpf2go`-generated structs dynamically; this centralizes object registration so newly added maps, programs, and active link IDs are automatically protected in the kernel without requiring manual Go code updates.
+  - **Reverse-Shell Prevention**: `sys_enter_dup2` and `sys_enter_dup3` monitor file descriptor cloning. If an active network socket is duplicated onto standard I/O handles (`0`, `1`, or `2`), state is tracked in BPF task storage across `fork()` calls. When `lsm/bprm_check_security` fires, K-Guard pre-emptively blocks shell execution (`-EPERM`).
 
 An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
 disable LSM blocking instantly at runtime without detaching or reloading

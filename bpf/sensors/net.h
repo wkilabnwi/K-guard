@@ -323,4 +323,74 @@ int tc_ingress_dns(struct __sk_buff *skb) {
     return 0;
 }
 
+// sys_dup() helpers and sensors
+
+#ifndef S_IFSOCK
+#define S_IFSOCK 0140000
+#endif
+
+#ifndef S_IFMT
+#define S_IFMT 0170000
+#endif
+
+struct syscall_dup2_args {
+    unsigned long long common_tp_fields;
+    int syscall_nr;
+    __u32 __pad;
+    __u64 oldfd;
+    __u64 newfd;
+};
+
+struct syscall_dup3_args {
+    unsigned long long common_tp_fields;
+    int syscall_nr;
+    __u32 __pad;
+    __u64 oldfd;
+    __u64 newfd;
+    __u64 flags;
+};
+
+static __always_inline void check_socket_dup(__u32 oldfd, __u32 newfd) {
+    if (newfd > 2) return; // Only target stdin(0), stdout(1), stderr(2)
+
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    if (!task) return;
+
+    struct files_struct *files = BPF_CORE_READ(task, files);
+    if (!files) return;
+
+    struct fdtable *fdt = BPF_CORE_READ(files, fdt);
+    if (!fdt) return;
+
+    struct file **fd_array = BPF_CORE_READ(fdt, fd);
+    if (!fd_array) return;
+
+    struct file *file = NULL;
+    if (bpf_probe_read_kernel(&file, sizeof(file), &fd_array[oldfd]) < 0 || !file)
+        return;
+
+    struct inode *inode = BPF_CORE_READ(file, f_inode);
+    if (!inode) return;
+
+    umode_t mode = BPF_CORE_READ(inode, i_mode);
+    if ((mode & S_IFMT) == S_IFSOCK) {
+        struct process_lineage *lin = bpf_task_storage_get(&lineage_map, task, 0, BPF_LOCAL_STORAGE_GET_F_CREATE);
+        if (lin) {
+            lin->socket_redirected = 1;
+        }
+    }
+}
+
+SEC("tracepoint/syscalls/sys_enter_dup2")
+int tp_dup2(struct syscall_dup2_args *ctx) {
+    check_socket_dup((__u32)ctx->oldfd, (__u32)ctx->newfd);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_dup3")
+int tp_dup3(struct syscall_dup3_args *ctx) {
+    check_socket_dup((__u32)ctx->oldfd, (__u32)ctx->newfd);
+    return 0;
+}
+
 #endif

@@ -79,6 +79,16 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
         return 0;
     }
 
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct process_lineage *lin = bpf_task_storage_get(&lineage_map, task, 0, 0);
+    if (lin && lin->socket_redirected) {
+        emit_exec_event(EVT_REVERSE_SHELL, path, truncated, 0);
+        if (enforcement_enabled) {
+            return -1;
+        }
+    }
+    // -
+
     if (check_fileless(bprm, path, truncated)) {
         return -1;
     }
@@ -105,10 +115,6 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
         struct inode *inode = BPF_CORE_READ(file, f_inode);
         if (inode) {
             umode_t i_mode = BPF_CORE_READ(inode, i_mode);
-            
-            struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
-            struct process_lineage *lin = bpf_task_storage_get(&lineage_map, task, 0, 0);
-            
             if (lin) {
                 if (i_mode & S_ISUID) {
                     lin->setuid_allowed = 1;
@@ -273,10 +279,12 @@ int BPF_PROG(kguard_task_alloc, struct task_struct *task, unsigned long clone_fl
             child_lin->suspicious_ancestor = parent_lin->suspicious_ancestor;
             child_lin->expected_uid = parent_lin->expected_uid;
             child_lin->setuid_allowed = parent_lin->setuid_allowed;
+            child_lin->socket_redirected = parent_lin->socket_redirected;
             __builtin_memcpy(child_lin->ancestor_filename, parent_lin->ancestor_filename, PATH_BUF_SIZE);
         } else {
             child_lin->expected_uid = (__u32)bpf_get_current_uid_gid();
             child_lin->setuid_allowed = 0;
+            child_lin->socket_redirected = 0;
         }
         child_lin->parent_pid = BPF_CORE_READ(current, tgid);
     }

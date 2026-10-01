@@ -879,3 +879,72 @@ func TestEngine_AnalyzeExec_AuditModePreExecBlocked(t *testing.T) {
 		t.Errorf("expected detail to indicate shadow/audit dry-run match, got %q", a.Detail)
 	}
 }
+
+func TestEngine_AnalyzeReverseShell(t *testing.T) {
+	eng, sink, _ := setupTestEngine(t)
+
+	eng.AnalyzeReverseShell(
+		"python3",
+		"/usr/bin/dash",
+		"python3 tst_rvshll.py",
+		9001, 1, 1000, 1000, 1,
+		false, "",
+	)
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for reverse shell detection, got %d", len(alerts))
+	}
+
+	a := alerts[0]
+	if a.EventType != "REVERSE_SHELL" {
+		t.Errorf("expected EventType 'REVERSE_SHELL', got %q", a.EventType)
+	}
+	if a.Severity != string(config.SeverityCritical) {
+		t.Errorf("expected severity CRITICAL, got %q", a.Severity)
+	}
+	if a.Comm != "python3" || a.Filename != "/usr/bin/dash" {
+		t.Errorf("unexpected comm/filename in alert: %s / %s", a.Comm, a.Filename)
+	}
+	if !strings.Contains(a.Detail, "Reverse-shell vector detected") {
+		t.Errorf("expected detail to describe reverse shell vector, got %q", a.Detail)
+	}
+}
+
+func TestRouter_ReverseShellEvent(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr, nil)
+
+	hdr := kebpf.BPFEventHdr{
+		EventType: uint32(kebpf.EventReverseShell),
+		Pid:       9002,
+		Ppid:      1,
+		Uid:       1000,
+		Gid:       1000,
+		CgroupId:  1,
+	}
+	copyInt8(hdr.Comm[:], "python3")
+
+	execEvt := kebpf.BPFExecEvent{
+		Hdr: hdr,
+	}
+	copyInt8(execEvt.Filename[:], "/usr/bin/dash")
+
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, execEvt); err != nil {
+		t.Fatalf("failed to pack binary event: %v", err)
+	}
+
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected router to process 1 reverse shell alert, got %d", len(alerts))
+	}
+
+	a := alerts[0]
+	if a.EventType != "REVERSE_SHELL" || a.Comm != "python3" || a.Filename != "/usr/bin/dash" {
+		t.Errorf("unexpected routed reverse shell alert content: %+v", a)
+	}
+}
