@@ -2,6 +2,7 @@ package processor
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
@@ -113,12 +114,14 @@ func (c *Correlator) RecordIPDomain(cgroupID uint64, ip, domain string) {
 	if ip == "" || domain == "" {
 		return
 	}
+	ip = normalizeIP(ip)
 	rec := ipRecord{domain: domain, at: time.Now()}
 	c.ipScoped.Add(ipKey{cgroupID, ip}, rec)
 	c.ipFallback.Add(ip, rec)
 }
 
 func (c *Correlator) GetDomainByIP(cgroupID uint64, ip string) (string, bool) {
+	ip = normalizeIP(ip)
 	if rec, ok := c.ipScoped.Get(ipKey{cgroupID, ip}); ok && time.Since(rec.at) <= 5*time.Minute {
 		return rec.domain, true
 	}
@@ -126,4 +129,12 @@ func (c *Correlator) GetDomainByIP(cgroupID uint64, ip string) (string, bool) {
 		return rec.domain, false
 	}
 	return "", false
+}
+
+func normalizeIP(ip string) string {
+	ip = strings.TrimSuffix(strings.TrimPrefix(ip, "["), "]")
+	if parsed := net.ParseIP(ip); parsed != nil {
+		return parsed.String()
+	}
+	return ip
 }

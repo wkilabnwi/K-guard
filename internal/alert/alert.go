@@ -8,6 +8,7 @@ import (
 	"k-guard/internal/config"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -114,8 +115,13 @@ func (w *sinkWorker) enqueue(a Alert) {
 type Dispatcher struct {
 	mu      sync.RWMutex
 	workers []*sinkWorker
-	onDrop  func(sink string)
+	closed  bool
 	wg      sync.WaitGroup
+
+	// onDrop is read from sink queues while OnDrop may be called concurrently,
+	// so it lives in an atomic rather than behind mu (Dispatch holds mu.RLock
+	// while enqueueing, and re-locking in the callback could deadlock).
+	onDrop atomic.Pointer[func(sink string)]
 }
 
 func NewDispatcher() *Dispatcher {
@@ -125,18 +131,20 @@ func NewDispatcher() *Dispatcher {
 // OnDrop registers a callback invoked (sink name) whenever an alert is
 // dropped due to that sink's queue being full
 func (d *Dispatcher) OnDrop(fn func(sink string)) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.onDrop = fn
+	d.onDrop.Store(&fn)
 }
 
 func (d *Dispatcher) Register(s Sink) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.closed {
+		return
+	}
+
 	name := s.Name()
 	w := newSinkWorker(s, func() {
-		if d.onDrop != nil {
-			d.onDrop(name)
+		if fn := d.onDrop.Load(); fn != nil && *fn != nil {
+			(*fn)(name)
 		}
 	})
 	d.workers = append(d.workers, w)
@@ -151,11 +159,11 @@ func (d *Dispatcher) Register(s Sink) {
 // Dispatch enqueues the alert to every sink and returns immediately
 func (d *Dispatcher) Dispatch(a Alert) {
 	d.mu.RLock()
-	workers := make([]*sinkWorker, len(d.workers))
-	copy(workers, d.workers)
-	d.mu.RUnlock()
-
-	for _, w := range workers {
+	defer d.mu.RUnlock()
+	if d.closed {
+		return
+	}
+	for _, w := range d.workers {
 		w.enqueue(a)
 	}
 }
@@ -163,12 +171,18 @@ func (d *Dispatcher) Dispatch(a Alert) {
 // Close drains and stops all sink workers
 func (d *Dispatcher) Close() {
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return
+	}
+	d.closed = true
 	workers := make([]*sinkWorker, len(d.workers))
 	copy(workers, d.workers)
-	for _, w := range d.workers {
+	for _, w := range workers {
 		close(w.queue)
 	}
 	d.mu.Unlock()
+
 	d.wg.Wait()
 
 	for _, w := range workers {

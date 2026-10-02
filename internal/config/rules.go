@@ -11,6 +11,8 @@ import (
 
 type RuleMode string
 
+const maxBPFPathLen = 255
+
 const (
 	RuleModeEnforce RuleMode = "enforce"
 	RuleModeAudit   RuleMode = "audit"
@@ -140,11 +142,17 @@ func (r *Rule) Validate(celEnv *cel.Env) error {
 			if !filepath.IsAbs(p) {
 				return fmt.Errorf("rule %q: block path %q must be absolute", r.Name, p)
 			}
+			if len(p) > maxBPFPathLen {
+				return fmt.Errorf("rule %q: block path is %d bytes, max is %d", r.Name, len(p), maxBPFPathLen)
+			}
 			r.ExactBlockPath = p
 		} else if m := prefixPathRe.FindStringSubmatch(r.Expression); m != nil {
 			p := firstGroup(m)
 			if !filepath.IsAbs(p) || len(p) < 2 {
 				return fmt.Errorf("rule %q: block prefix %q must be an absolute path longer than %q", r.Name, p, "/")
+			}
+			if len(p) > maxBPFPathLen {
+				return fmt.Errorf("rule %q: block path is %d bytes, max is %d", r.Name, len(p), maxBPFPathLen)
 			}
 			r.ExactBlockPrefix = p
 		} else {
@@ -204,10 +212,16 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) Validate(celEnv *cel.Env) error {
+	seen := make(map[string]struct{}, len(c.Rules))
 	for i := range c.Rules {
 		if err := c.Rules[i].Validate(celEnv); err != nil {
 			return err
 		}
+		name := c.Rules[i].Name
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("duplicate rule name %q: rule names must be unique", name)
+		}
+		seen[name] = struct{}{}
 	}
 	for _, pid := range c.ProtectedPIDs {
 		if pid <= 0 {
@@ -222,18 +236,21 @@ func (c *Config) Validate(celEnv *cel.Env) error {
 		return fmt.Errorf("kubelet_cert_file and kubelet_key_file must be set together")
 	}
 
-	for field, entries := range c.nonEmptyPathLists() {
+	allPathLists := make(map[string][]string)
+	for k, v := range c.nonEmptyPathLists() {
+		allPathLists[k] = v
+	}
+	for k, v := range c.commLists() {
+		allPathLists[k] = v
+	}
+
+	for field, entries := range allPathLists {
 		for _, p := range entries {
 			if p == "" {
 				return fmt.Errorf("%s: empty string entries are not allowed", field)
 			}
-		}
-	}
-
-	for field, entries := range c.commLists() {
-		for _, p := range entries {
-			if p == "" {
-				return fmt.Errorf("%s: empty string entries are not allowed", field)
+			if len(p) > maxBPFPathLen {
+				return fmt.Errorf("%s: path is %d bytes, max is %d: %q", field, len(p), maxBPFPathLen, p)
 			}
 			if !filepath.IsAbs(p) {
 				return fmt.Errorf("%s: %q must be an absolute path", field, p)

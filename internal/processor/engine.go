@@ -168,26 +168,25 @@ func isAllowlisted(cfg *config.Config, filename string) bool {
 }
 
 // AnalyzeExec is the exec-path rule engine entry point
-func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, args string, blocked bool, ancestorSuspicious bool, ancestorFilename string, pathTruncated, isFileless bool) {
+func (e *Engine) AnalyzeExec(meta ProcessMeta, blocked bool) {
 	cfg := e.cfg.Current()
-	e.correlator.RecordExec(pid, ppid, comm, filename)
+	e.correlator.RecordExec(meta.PID, meta.PPID, meta.Comm, meta.Filename)
 
-	if isAllowlisted(cfg, filename) {
-		return // explicitly trusted
+	if isAllowlisted(cfg, meta.Filename) {
+		return
 	}
 
-	if isFileless {
-		e.handleFilelessExec(comm, filename, args, pid, ppid, uid, gid, cgroupID, ancestorSuspicious, ancestorFilename, pathTruncated)
+	if meta.IsFileless {
+		e.handleFilelessExec(meta)
 		return
 	}
 
 	if blocked {
-		e.handleExecBlocked(cfg, comm, filename, args, pid, ppid, uid, gid, cgroupID, ancestorSuspicious, ancestorFilename, pathTruncated, isFileless)
+		e.handleExecBlocked(cfg, meta)
 		return
 	}
 
-	// Prepare CEL evaluation context payload
-	h := &execHash{pid: pid}
+	h := &execHash{pid: meta.PID}
 	shaVal, err := h.get()
 	if err != nil {
 		e.metrics.IncHashCheckError()
@@ -195,20 +194,20 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 
 	celCtx := config.EventContext{
 		Type:               "EXEC",
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		IsSuspiciousPath:   isSuspiciousPath(filename, cfg.SuspiciousPaths),
+		AncestorSuspicious: meta.AncestorSuspicious,
+		AncestorFilename:   meta.AncestorFilename,
+		IsSuspiciousPath:   isSuspiciousPath(meta.Filename, cfg.SuspiciousPaths),
 		Process: config.ProcessContext{
-			Path:       filename,
-			Basename:   filepath.Base(filename),
+			Path:       meta.Filename,
+			Basename:   filepath.Base(meta.Filename),
 			SHA256:     shaVal,
-			PID:        int64(pid),
-			PPID:       int64(ppid),
-			UID:        int64(uid),
-			GID:        int64(gid),
-			Comm:       comm,
-			Args:       strings.Fields(args),
-			IsFileless: isFileless,
+			PID:        int64(meta.PID),
+			PPID:       int64(meta.PPID),
+			UID:        int64(meta.UID),
+			GID:        int64(meta.GID),
+			Comm:       meta.Comm,
+			Args:       strings.Fields(meta.Args),
+			IsFileless: meta.IsFileless,
 		},
 	}
 
@@ -217,49 +216,34 @@ func (e *Engine) AnalyzeExec(comm, filename string, pid, ppid, uid, gid uint32, 
 			continue
 		}
 
-		if !e.dedup.Allow(r.Name + "|" + strconv.Itoa(int(pid))) {
+		e.metrics.IncRuleHit(r.Name, string(r.Severity), string(r.Action))
+
+		if !e.dedup.Allow(r.Name + "|" + strconv.Itoa(int(meta.PID))) {
 			continue
 		}
 
-		if terminated := e.processExecRuleMatch(r, filename, comm, args, pid, ppid, uid, gid, cgroupID, ancestorSuspicious, ancestorFilename, pathTruncated); terminated {
+		if terminated := e.processExecRuleMatch(r, meta); terminated {
 			return
 		}
 	}
 }
 
 // Helper: Handle fileless execution events
-func (e *Engine) handleFilelessExec(comm, filename, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
+func (e *Engine) handleFilelessExec(meta ProcessMeta) {
 	filelessDetail := "Fileless execution detected"
 	sev := config.SeverityCritical
 
 	e.metrics.IncRuleHit("FilelessExecution", string(sev), string(config.ActionKill))
 
-	a := alert.Alert{
-		Severity:           string(sev),
-		Action:             string(config.ActionKill),
-		EventType:          "FILELESS_EXEC",
-		Pid:                pid,
-		Ppid:               ppid,
-		Uid:                uid,
-		Gid:                gid,
-		Comm:               comm,
-		CgroupID:           cgroupID,
-		Filename:           filename,
-		Args:               args,
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		PathTruncated:      pathTruncated,
-		Detail:             filelessDetail,
-	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	a := meta.ToAlert("FILELESS_EXEC", sev, config.ActionKill, filelessDetail)
+	e.emit(a)
 }
 
 // Helper: Handle pre-flight LSM blocked execution events
-func (e *Engine) handleExecBlocked(cfg *config.Config, comm, filename, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated, isFileless bool) {
+func (e *Engine) handleExecBlocked(cfg *config.Config, meta ProcessMeta) {
 	e.metrics.IncBlock()
 	detail := ""
-	if pathTruncated {
+	if meta.PathTruncated {
 		detail = "path truncated during read, match against blocked_paths may be unreliable"
 	}
 
@@ -269,25 +253,25 @@ func (e *Engine) handleExecBlocked(cfg *config.Config, comm, filename, args stri
 
 	celCtx := config.EventContext{
 		Type:               "EXEC_BLOCKED",
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		IsSuspiciousPath:   isSuspiciousPath(filename, cfg.SuspiciousPaths),
+		AncestorSuspicious: meta.AncestorSuspicious,
+		AncestorFilename:   meta.AncestorFilename,
+		IsSuspiciousPath:   isSuspiciousPath(meta.Filename, cfg.SuspiciousPaths),
 		Process: config.ProcessContext{
-			Path:       filename,
-			Basename:   filepath.Base(filename),
-			PID:        int64(pid),
-			PPID:       int64(ppid),
-			UID:        int64(uid),
-			GID:        int64(gid),
-			Comm:       comm,
-			Args:       strings.Fields(args),
-			IsFileless: isFileless,
+			Path:       meta.Filename,
+			Basename:   filepath.Base(meta.Filename),
+			PID:        int64(meta.PID),
+			PPID:       int64(meta.PPID),
+			UID:        int64(meta.UID),
+			GID:        int64(meta.GID),
+			Comm:       meta.Comm,
+			Args:       strings.Fields(meta.Args),
+			IsFileless: meta.IsFileless,
 		},
 	}
 
 	for _, r := range cfg.Rules {
 		if r.Action == config.ActionBlock {
-			if r.ExactBlockPath == filename || (r.ExactBlockPrefix != "" && strings.HasPrefix(filename, r.ExactBlockPrefix)) || evaluateCEL(r, celCtx) {
+			if r.ExactBlockPath == meta.Filename || (r.ExactBlockPrefix != "" && strings.HasPrefix(meta.Filename, r.ExactBlockPrefix)) || evaluateCEL(r, celCtx) {
 				ruleName = r.Name
 				mitre = r.Mitre
 				ruleMode = r.Mode
@@ -306,50 +290,32 @@ func (e *Engine) handleExecBlocked(cfg *config.Config, comm, filename, args stri
 		detail += "[SHADOW/AUDIT] Pre-exec LSM block dry-run matched (execution allowed)"
 	}
 
-	e.auditLogger.Log(audit.Record{
-		Decision:  audit.DecisionBlock,
-		EventType: "EXEC_BLOCKED",
-		RuleName:  ruleName,
-		Mitre:     mitre,
-		PID:       pid, PPID: ppid, UID: uid,
-		Comm: comm, CgroupID: cgroupID,
-		Target: filename,
-		Reason: reason,
-	})
+	a := meta.ToAlert("EXEC_BLOCKED", config.SeverityCritical, config.ActionAlert, detail)
+	a.RuleName = ruleName
+	a.Mitre = mitre
+	a.Mode = string(ruleMode)
+	a.Blocked = isActuallyBlocked
 
-	a := alert.Alert{
-		RuleName: ruleName, Severity: string(config.SeverityCritical), Action: string(config.ActionAlert),
-		Mitre:   mitre,
-		Mode:    string(ruleMode),
-		Blocked: isActuallyBlocked, EventType: "EXEC_BLOCKED", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm,
-		CgroupID: cgroupID, Filename: filename, Args: args,
-		AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-		PathTruncated: pathTruncated, Detail: detail,
-	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	rec := meta.ToAuditRecord(audit.DecisionBlock, "EXEC_BLOCKED", ruleName, mitre, meta.Filename, reason)
+	e.emitAuditAndAlert(a, rec)
 }
 
 // Helper: Handle matched post-exec rules
-func (e *Engine) processExecRuleMatch(r config.Rule, filename, comm, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) bool {
+func (e *Engine) processExecRuleMatch(r config.Rule, meta ProcessMeta) bool {
 	sev := r.Severity
 	detail := ""
-	if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
+	if meta.PathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
 		sev = config.SeverityMedium
 	}
 	e.metrics.IncRuleHit(r.Name, string(sev), string(r.Action))
-	if pathTruncated {
+	if meta.PathTruncated {
 		detail = "path truncated during read, match against configured path lists may be unreliable"
 	}
 
-	a := alert.Alert{
-		RuleName: r.Name, Severity: string(sev), Action: string(r.Action),
-		Mitre:     r.Mitre,
-		Mode:      string(r.Mode),
-		EventType: "EXEC", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		Filename: filename, Args: args, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-		PathTruncated: pathTruncated, Detail: detail,
-	}
+	a := meta.ToAlert("EXEC", sev, r.Action, detail)
+	a.RuleName = r.Name
+	a.Mitre = r.Mitre
+	a.Mode = string(r.Mode)
 
 	if r.Mode == config.RuleModeAudit {
 		shadowDetail := fmt.Sprintf("[SHADOW MODE] Rule matched dry-run audit mode; %s action suppressed", r.Action)
@@ -358,34 +324,25 @@ func (e *Engine) processExecRuleMatch(r config.Rule, filename, comm, args string
 		} else {
 			a.Detail = shadowDetail
 		}
-		e.dispatcher.Dispatch(e.enrichAlert(a))
+		e.emit(a)
 		return false
 	}
 
 	switch r.Action {
 	case config.ActionKill, config.ActionBlock:
-		if err := e.guard.SafeKill(pid, comm); err != nil {
+		if err := e.guard.SafeKill(meta.PID, meta.Comm); err != nil {
 			a.ResponseErr = err.Error()
 			e.metrics.IncKillError()
 		} else {
 			e.metrics.IncKill()
-
-			e.auditLogger.Log(audit.Record{
-				Decision:  audit.DecisionKill,
-				EventType: "EXEC",
-				RuleName:  r.Name,
-				Mitre:     r.Mitre,
-				PID:       pid, PPID: ppid, UID: uid,
-				Comm: comm, CgroupID: cgroupID,
-				Target: filename,
-				Reason: "Process killed post-exec via rule action",
-			})
+			rec := meta.ToAuditRecord(audit.DecisionKill, "EXEC", r.Name, r.Mitre, meta.Filename, "Process killed post-exec via rule action")
+			e.emitAudit(rec)
 		}
-		e.dispatcher.Dispatch(e.enrichAlert(a))
+		e.emit(a)
 		return true
 	}
 
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	e.emit(a)
 	return false
 }
 
@@ -395,8 +352,8 @@ func (e *Engine) RecordDNSAnswer(cgroupID uint64, ip, domain string) {
 
 // AnalyzeNetworkEgress handles CONNECT and SENDTO egress sensor events, escalating
 // to CRITICAL when kernel lineage marks the process as originating from a suspicious binary.
-func (e *Engine) AnalyzeNetworkEgress(eventType string, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, destIP string, destPort uint16, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid)) + "|" + destIP) {
+func (e *Engine) AnalyzeNetworkEgress(meta ProcessMeta, eventType, destIP string, destPort uint16) {
+	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(meta.PID)) + "|" + destIP) {
 		return
 	}
 
@@ -404,7 +361,7 @@ func (e *Engine) AnalyzeNetworkEgress(eventType string, pid, ppid, uid, gid uint
 	detail := ""
 
 	if e.correlator != nil {
-		if domain, exact := e.correlator.GetDomainByIP(cgroupID, destIP); domain != "" {
+		if domain, exact := e.correlator.GetDomainByIP(meta.CgroupID, destIP); domain != "" {
 			if exact {
 				detail = fmt.Sprintf("Resolved domain: %s", domain)
 			} else {
@@ -413,34 +370,31 @@ func (e *Engine) AnalyzeNetworkEgress(eventType string, pid, ppid, uid, gid uint
 		}
 	}
 
-	if ancestorSuspicious {
+	if meta.AncestorSuspicious {
 		sev = config.SeverityCritical
 	}
 
-	a := alert.Alert{
-		Severity: string(sev), Action: string(config.ActionAlert),
-		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		DestIP: destIP, DestPort: destPort, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-	}
+	a := meta.ToAlert(eventType, sev, config.ActionAlert, detail)
+	a.DestIP = destIP
+	a.DestPort = destPort
 
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	e.emit(a)
 }
 
 // AnalyzeGeneric handles every other sensor type with a shared, simple severity
 // default. each is still its own distinct EventType in the alert so sinks
 // and the dashboard can filter them independently.
-func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severity, pid, ppid, uid, gid uint32, comm string, cgroupID uint64, filename, detail string, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
-
-	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(pid)) + "|" + filename) {
+func (e *Engine) AnalyzeGeneric(meta ProcessMeta, eventType string, defaultSeverity config.Severity, detail string) {
+	if !e.dedup.Allow(eventType + "|" + strconv.Itoa(int(meta.PID)) + "|" + meta.Filename) {
 		return
 	}
 
 	sev := defaultSeverity
-	if ancestorSuspicious {
+	if meta.AncestorSuspicious {
 		sev = config.SeverityCritical
 	}
 
-	if pathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
+	if meta.PathTruncated && sev.Rank() < config.SeverityMedium.Rank() {
 		sev = config.SeverityMedium
 		if detail != "" {
 			detail += " | "
@@ -448,191 +402,102 @@ func (e *Engine) AnalyzeGeneric(eventType string, defaultSeverity config.Severit
 		detail += "path truncated during read, manual check the full path"
 	}
 
-	a := alert.Alert{
-		Severity: string(sev), Action: string(config.ActionAlert),
-		EventType: eventType, Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		Filename: filename, Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-		PathTruncated: pathTruncated,
-	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	a := meta.ToAlert(eventType, sev, config.ActionAlert, detail)
+	e.emit(a)
 }
 
-func (e *Engine) AnalyzeWriteBlocked(comm, filename string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string, pathTruncated bool) {
+func (e *Engine) AnalyzeWriteBlocked(meta ProcessMeta) {
 	e.metrics.IncBlock()
 
-	e.auditLogger.Log(audit.Record{
-		Decision:  audit.DecisionBlock,
-		EventType: "WRITE_BLOCKED",
-		PID:       pid, PPID: ppid, UID: uid,
-		Comm: comm, CgroupID: cgroupID,
-		Target: filename,
-		Reason: "Write intent blocked pre-flight by blocked_write_paths policy",
-	})
-
 	detail := "write intent blocked pre-flight by blocked_write_paths policy"
-	if pathTruncated {
+	if meta.PathTruncated {
 		detail += " | path truncated during read"
 	}
 
-	a := alert.Alert{
-		Severity:  string(config.SeverityCritical),
-		Action:    string(config.ActionAlert),
-		Blocked:   true,
-		EventType: "WRITE_BLOCKED",
-		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
-		Comm: comm, CgroupID: cgroupID, Filename: filename,
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		PathTruncated:      pathTruncated,
-		Detail:             detail,
-	}
+	a := meta.ToAlert("WRITE_BLOCKED", config.SeverityCritical, config.ActionAlert, detail)
+	a.Blocked = true
 
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	rec := meta.ToAuditRecord(audit.DecisionBlock, "WRITE_BLOCKED", "", nil, meta.Filename, "Write intent blocked pre-flight by blocked_write_paths policy")
+	e.emitAuditAndAlert(a, rec)
 }
 
-func (e *Engine) AnalyzePtraceBlocked(comm, targetComm string, targetPid, mode, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("ptrace_blocked|" + strconv.Itoa(int(pid)) + "|" + strconv.Itoa(int(targetPid))) {
-		return
-	}
+func (e *Engine) AnalyzePtraceBlocked(meta ProcessMeta, targetComm string, targetPid, mode uint32) {
 	e.metrics.IncBlock()
 
-	e.auditLogger.Log(audit.Record{
-		Decision:  audit.DecisionBlock,
-		EventType: "PTRACE_BLOCKED",
-		PID:       pid, PPID: ppid, UID: uid,
-		Comm: comm, CgroupID: cgroupID,
-		Target: targetComm,
-		Reason: fmt.Sprintf("Blocked ptrace request mode=0x%x targeting PID %d", mode, targetPid),
-	})
-
+	reason := fmt.Sprintf("Blocked ptrace request mode=0x%x targeting PID %d", mode, targetPid)
 	detail := fmt.Sprintf("BLOCKED ptrace request mode=0x%x targeting pid=%d (comm='%s')", mode, targetPid, targetComm)
 
-	a := alert.Alert{
-		Severity:  string(config.SeverityCritical),
-		Action:    string(config.ActionAlert),
-		Blocked:   true,
-		EventType: "PTRACE_BLOCKED",
-		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
-		Comm: comm, CgroupID: cgroupID, Filename: targetComm,
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		Detail:             detail,
-	}
+	a := meta.ToAlert("PTRACE_BLOCKED", config.SeverityCritical, config.ActionAlert, detail)
+	a.Filename = targetComm
+	a.Blocked = true
 
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	rec := meta.ToAuditRecord(audit.DecisionBlock, "PTRACE_BLOCKED", "", nil, targetComm, reason)
+	e.emitAuditAndAlert(a, rec)
 }
 
-func (e *Engine) AnalyzeKmodBlocked(comm string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("kmod_blocked|" + strconv.Itoa(int(pid))) {
-		return
-	}
+func (e *Engine) AnalyzeKmodBlocked(meta ProcessMeta) {
 	e.metrics.IncBlock()
 
-	e.auditLogger.Log(audit.Record{
-		Decision:  audit.DecisionBlock,
-		EventType: "KMOD_BLOCKED",
-		PID:       pid, PPID: ppid, UID: uid,
-		Comm: comm, CgroupID: cgroupID,
-		Reason: "Kernel module load or read blocked by LSM policy",
-	})
-
-	detail := fmt.Sprintf("Kernel module load or read blocked by LSM policy (comm='%s')", comm)
-	if ancestorSuspicious {
-		detail += fmt.Sprintf(" [triggered via suspicious ancestor: %s]", ancestorFilename)
+	detail := fmt.Sprintf("Kernel module load or read blocked by LSM policy (comm='%s')", meta.Comm)
+	if meta.AncestorSuspicious {
+		detail += fmt.Sprintf(" [triggered via suspicious ancestor: %s]", meta.AncestorFilename)
 	}
 
-	a := alert.Alert{
-		Severity:           string(config.SeverityCritical),
-		Action:             string(config.ActionAlert),
-		Blocked:            true,
-		EventType:          "KMOD_BLOCKED",
-		Pid:                pid,
-		Ppid:               ppid,
-		Uid:                uid,
-		Gid:                gid,
-		Comm:               comm,
-		CgroupID:           cgroupID,
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		Detail:             detail,
-	}
+	a := meta.ToAlert("KMOD_BLOCKED", config.SeverityCritical, config.ActionAlert, detail)
+	a.Blocked = true
 
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	rec := meta.ToAuditRecord(audit.DecisionBlock, "KMOD_BLOCKED", "", nil, "", "Kernel module load or read blocked by LSM policy")
+	e.emitAuditAndAlert(a, rec)
 }
 
-func (e *Engine) AnalyzeIoUring(pid, ppid, uid, gid uint32, comm, filename string, cgroupID uint64, opcode uint8, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("iouring|" + strconv.Itoa(int(pid)) + "|" + strconv.Itoa(int(opcode))) {
+func (e *Engine) AnalyzeIoUring(meta ProcessMeta, opcode uint8) {
+	if !e.dedup.Allow("iouring|" + strconv.Itoa(int(meta.PID)) + "|" + strconv.Itoa(int(opcode))) {
 		return
 	}
 
 	detail := fmt.Sprintf("io_uring evasion attempt detected (opcode=%d)", opcode)
 	sev := config.SeverityMedium
-	if ancestorSuspicious {
+	if meta.AncestorSuspicious {
 		sev = config.SeverityCritical
 	}
 
-	a := alert.Alert{
-		Severity: string(sev), Action: string(config.ActionAlert),
-		EventType: "IO_URING", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	a := meta.ToAlert("IO_URING", sev, config.ActionAlert, detail)
+	e.emit(a)
 }
 
-func (e *Engine) AnalyzeLpeBlocked(comm string, pid, ppid, uid, gid uint32, cgroupID uint64, oldUID, newUID uint32, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("lpe_blocked|" + strconv.Itoa(int(pid))) {
-		return
-	}
+func (e *Engine) AnalyzeLpeBlocked(meta ProcessMeta, oldUID, newUID uint32) {
 	e.metrics.IncBlock()
 
-	detail := fmt.Sprintf("Unauthorized Local Privilege Escalation blocked by LSM policy (comm='%s', uid %d -> %d)", comm, oldUID, newUID)
-	if ancestorSuspicious {
-		detail += fmt.Sprintf(" [triggered via suspicious ancestor: %s]", ancestorFilename)
+	reason := fmt.Sprintf("Unauthorized Local Privilege Escalation blocked by LSM policy (comm='%s', uid %d -> %d)", meta.Comm, oldUID, newUID)
+	detail := reason
+	if meta.AncestorSuspicious {
+		detail += fmt.Sprintf(" [triggered via suspicious ancestor: %s]", meta.AncestorFilename)
 	}
 
-	a := alert.Alert{
-		Severity:           string(config.SeverityCritical),
-		Action:             string(config.ActionAlert),
-		Blocked:            true,
-		EventType:          "LPE_BLOCKED",
-		Pid:                pid,
-		Ppid:               ppid,
-		Uid:                uid,
-		Gid:                gid,
-		Comm:               comm,
-		CgroupID:           cgroupID,
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		Detail:             detail,
-	}
+	a := meta.ToAlert("LPE_BLOCKED", config.SeverityCritical, config.ActionAlert, detail)
+	a.Blocked = true
 
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	rec := meta.ToAuditRecord(audit.DecisionBlock, "LPE_BLOCKED", "", nil, "", reason)
+	e.emitAuditAndAlert(a, rec)
 }
 
-func (e *Engine) AnalyzePmu(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, mispredCount uint64, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("pmu_mispredict|" + strconv.Itoa(int(pid))) {
+func (e *Engine) AnalyzePmu(meta ProcessMeta, mispredCount uint64) {
+	if !e.dedup.Allow("pmu_mispredict|" + strconv.Itoa(int(meta.PID))) {
 		return
 	}
 
 	detail := fmt.Sprintf("PMU branch misprediction spike: count=%d", mispredCount)
 	sev := config.SeverityMedium
-	if ancestorSuspicious {
+	if meta.AncestorSuspicious {
 		sev = config.SeverityCritical
 	}
 
-	a := alert.Alert{
-		Severity: string(sev), Action: string(config.ActionAlert),
-		EventType: "BRANCH_MISPREDICT", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	a := meta.ToAlert("BRANCH_MISPREDICT", sev, config.ActionAlert, detail)
+	e.emit(a)
 }
 
-func (e *Engine) AnalyzeNsChange(pid, ppid, uid, gid uint32, comm string, cgroupID uint64, op uint32, flags uint64, nstype uint32, ancestorSuspicious bool, ancestorFilename string) {
-	if !e.dedup.Allow("ns_change|" + strconv.Itoa(int(pid)) + "|" + strconv.Itoa(int(op))) {
+func (e *Engine) AnalyzeNsChange(meta ProcessMeta, op uint32, flags uint64, nstype uint32) {
+	if !e.dedup.Allow("ns_change|" + strconv.Itoa(int(meta.PID)) + "|" + strconv.Itoa(int(op))) {
 		return
 	}
 
@@ -643,24 +508,17 @@ func (e *Engine) AnalyzeNsChange(pid, ppid, uid, gid uint32, comm string, cgroup
 
 	detail := fmt.Sprintf("Namespace manipulation attempt via %s() (flags/fd=0x%x, nstype=0x%x)", opName, flags, nstype)
 	sev := config.SeverityHigh
-	if ancestorSuspicious {
+	if meta.AncestorSuspicious {
 		sev = config.SeverityCritical
 	}
 
-	a := alert.Alert{
-		Severity: string(sev), Action: string(config.ActionAlert),
-		EventType: "NS_CHANGE", Pid: pid, Ppid: ppid, Uid: uid, Gid: gid, Comm: comm, CgroupID: cgroupID,
-		Detail: detail, AncestorSuspicious: ancestorSuspicious, AncestorFilename: ancestorFilename,
-	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
+	a := meta.ToAlert("NS_CHANGE", sev, config.ActionAlert, detail)
+	e.emit(a)
 }
 
-func (e *Engine) AnalyzeReverseShell(comm, filename, args string, pid, ppid, uid, gid uint32, cgroupID uint64, ancestorSuspicious bool, ancestorFilename string) {
+func (e *Engine) AnalyzeReverseShell(meta ProcessMeta) {
 	cfg := e.cfg.Current()
-	enforced := cfg.EnforcementEnabled && e.ebpfMgr.LSMEnabled
-
-	e.metrics.IncBlock()
+	enforced := cfg.EnforcementEnabled && e.ebpfMgr != nil && e.ebpfMgr.LSMEnabled
 
 	detail := "Reverse-shell vector detected: network socket redirected to standard I/O (fd 0/1/2) prior to shell execution"
 
@@ -669,47 +527,26 @@ func (e *Engine) AnalyzeReverseShell(comm, filename, args string, pid, ppid, uid
 		act = config.ActionBlock
 	}
 
-	a := alert.Alert{
-		Severity:  string(config.SeverityCritical),
-		Action:    string(act),
-		Blocked:   enforced,
-		EventType: "REVERSE_SHELL",
-		Pid:       pid, Ppid: ppid, Uid: uid, Gid: gid,
-		Comm: comm, CgroupID: cgroupID, Filename: filename, Args: args,
-		AncestorSuspicious: ancestorSuspicious,
-		AncestorFilename:   ancestorFilename,
-		Detail:             detail,
-	}
+	a := meta.ToAlert("REVERSE_SHELL", config.SeverityCritical, act, detail)
+	a.Blocked = enforced
 
 	if enforced {
+		e.metrics.IncBlock()
 		a.Detail += " [LSM Pre-flight Blocked]"
-		e.auditLogger.Log(audit.Record{
-			Decision:  audit.DecisionBlock,
-			EventType: "REVERSE_SHELL",
-			PID:       pid, PPID: ppid, UID: uid,
-			Comm: comm, CgroupID: cgroupID,
-			Target: filename,
-			Reason: detail + " (LSM Pre-flight Blocked)",
-		})
+		rec := meta.ToAuditRecord(audit.DecisionBlock, "REVERSE_SHELL", "", nil, meta.Filename, detail+" (LSM Pre-flight Blocked)")
+		e.emitAuditAndAlert(a, rec)
 	} else {
-		e.auditLogger.Log(audit.Record{
-			Decision:  audit.DecisionKill,
-			EventType: "REVERSE_SHELL",
-			PID:       pid, PPID: ppid, UID: uid,
-			Comm: comm, CgroupID: cgroupID,
-			Target: filename,
-			Reason: detail + " (Post-exec SIGKILL)",
-		})
+		rec := meta.ToAuditRecord(audit.DecisionKill, "REVERSE_SHELL", "", nil, meta.Filename, detail+" (Post-exec SIGKILL)")
+		e.emitAudit(rec)
 
-		if err := e.guard.SafeKill(pid, comm); err != nil {
+		if err := e.guard.SafeKill(meta.PID, meta.Comm); err != nil {
 			a.ResponseErr = err.Error()
 			e.metrics.IncKillError()
 		} else {
 			e.metrics.IncKill()
 		}
+		e.emit(a)
 	}
-
-	e.dispatcher.Dispatch(e.enrichAlert(a))
 }
 
 // enrichAlert applies contextual metadata (timestamps, k8s Pod/Container info) to an alert
@@ -736,4 +573,19 @@ func (e *Engine) enrichAlert(a alert.Alert) alert.Alert {
 	}
 
 	return a
+}
+
+func (e *Engine) emit(a alert.Alert) {
+	e.dispatcher.Dispatch(e.enrichAlert(a))
+}
+
+func (e *Engine) emitAudit(rec audit.Record) {
+	if e.auditLogger != nil {
+		e.auditLogger.Log(rec)
+	}
+}
+
+func (e *Engine) emitAuditAndAlert(a alert.Alert, rec audit.Record) {
+	e.emitAudit(rec)
+	e.emit(a)
 }

@@ -53,7 +53,7 @@ func exeIdentity(pid uint32) (trust.FileID, error) {
 	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
 		return trust.FileID{}, err
 	}
-	return trust.FileID{Dev: uint64(st.Dev), Ino: st.Ino}, nil
+	return trust.IDFromStat(&st), nil
 }
 
 // IsProtected reports whether the given pid/comm must never be killed

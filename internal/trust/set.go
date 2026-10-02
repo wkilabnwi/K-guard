@@ -29,18 +29,21 @@ func NewSet() *Set {
 	return &Set{pinned: make(map[string]*pinnedFile)}
 }
 
+func IDFromStat(st *syscall.Stat_t) FileID {
+	major := unix.Major(uint64(st.Dev))
+	minor := unix.Minor(uint64(st.Dev))
+	return FileID{
+		Dev: (uint64(major) << 20) | (uint64(minor) & 0xfffff),
+		Ino: st.Ino,
+	}
+}
+
 func statFD(f *os.File) (FileID, error) {
-
 	var st syscall.Stat_t
-
 	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
 		return FileID{}, err
 	}
-
-	major := unix.Major(uint64(st.Dev))
-	minor := unix.Minor(uint64(st.Dev))
-	kernelDev := (uint64(major) << 20) | (uint64(minor) & 0xfffff)
-	return FileID{Dev: kernelDev, Ino: st.Ino}, nil
+	return IDFromStat(&st), nil
 }
 
 func (s *Set) Sync(paths []string, label string) []FileID {
