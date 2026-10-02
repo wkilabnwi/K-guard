@@ -52,7 +52,7 @@ func (t EventType) String() string {
 	case EventKmodBlocked:
 		return "KMOD_BLOCKED"
 	case EventIoUring:
-		return "IOURING"
+		return "IO_URING"
 	case EventLpeBlocked:
 		return "LPE_BLOCKED"
 	case EventBranchMispredict:

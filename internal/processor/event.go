@@ -8,11 +8,28 @@ import (
 	"path/filepath"
 	"strings"
 
+	"k-guard/internal/alert"
+	"k-guard/internal/audit"
 	"k-guard/internal/config"
 	kebpf "k-guard/internal/ebpf"
 	"k-guard/internal/metrics"
 	"k-guard/internal/trust"
 )
+
+type ProcessMeta struct {
+	PID                uint32
+	PPID               uint32
+	UID                uint32
+	GID                uint32
+	Comm               string
+	CgroupID           uint64
+	Filename           string
+	Args               string
+	AncestorSuspicious bool
+	AncestorFilename   string
+	PathTruncated      bool
+	IsFileless         bool
+}
 
 func isLoopback(ip net.IP) bool {
 	return ip.IsLoopback()
@@ -69,7 +86,6 @@ func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager, telemet
 // swallowed to avoid a malformed record taking down the read loop
 
 func (r *Router) ProcessRawRecord(raw []byte) {
-	// Unmarshal the common header first
 	var hdr kebpf.BPFEventHdr
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &hdr); err != nil {
 		r.metrics.IncRingbufDrop()
@@ -96,10 +112,22 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 	et := kebpf.EventType(hdr.EventType)
 	r.metrics.IncEvent(et.String())
 
-	comm := int8ToString(hdr.Comm[:])
+	ancestorFilename := int8ToString(hdr.AncestorFilename[:])
+	if ancestorFilename != "" {
+		ancestorFilename = filepath.Clean(ancestorFilename)
+	}
 
-	ancestorSuspicious := hdr.AncestorSuspicious == 1
-	ancestorFilename := filepath.Clean(int8ToString(hdr.AncestorFilename[:]))
+	// Build common baseline ProcessMeta context
+	meta := ProcessMeta{
+		PID:                hdr.Pid,
+		PPID:               hdr.Ppid,
+		UID:                hdr.Uid,
+		GID:                hdr.Gid,
+		Comm:               int8ToString(hdr.Comm[:]),
+		CgroupID:           hdr.CgroupId,
+		AncestorSuspicious: hdr.AncestorSuspicious == 1,
+		AncestorFilename:   ancestorFilename,
+	}
 
 	switch et {
 	case kebpf.EventExec, kebpf.EventExecBlocked:
@@ -110,21 +138,15 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		}
 
 		uncleanfilename := int8ToString(evt.Filename[:])
-		filename := resolveAbsolutePath(hdr.Pid, uncleanfilename)
-		if filename == "" {
-			filename = "UNKNOWN_OR_EMPTY"
+		meta.Filename = resolveAbsolutePath(hdr.Pid, uncleanfilename)
+		if meta.Filename == "" {
+			meta.Filename = "UNKNOWN_OR_EMPTY"
 		}
-		args := parseArgs(evt.Args[:])
-		pathTruncated := evt.PathTruncated == 1
-		isFileless := evt.IsFileless == 1
+		meta.Args = parseArgs(evt.Args[:])
+		meta.PathTruncated = evt.PathTruncated == 1
+		meta.IsFileless = evt.IsFileless == 1
 
-		isBlocked := (et == kebpf.EventExecBlocked)
-
-		r.engine.AnalyzeExec(
-			comm, filename, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
-			hdr.CgroupId, args, isBlocked, ancestorSuspicious,
-			ancestorFilename, pathTruncated, isFileless,
-		)
+		r.engine.AnalyzeExec(meta, et == kebpf.EventExecBlocked)
 
 	case kebpf.EventConnect, kebpf.EventSendto:
 		exeID := trust.FileID{Dev: hdr.ExeDev, Ino: hdr.ExeIno}
@@ -132,25 +154,18 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		var daddr uint32
-		var daddr6 [16]uint8
-		var dport uint16
-		var family uint16
-		var unixPath [108]int8
-
 		var evt kebpf.BPFConnectEvent
 		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
 			r.metrics.IncRingbufDrop()
 			return
 		}
-		daddr, daddr6, dport, family, unixPath = evt.Daddr, evt.Daddr6, evt.Dport, evt.Family, evt.UnixPath
 
 		var destIP string
-		destPort := dport
+		destPort := evt.Dport
 
-		switch family {
+		switch evt.Family {
 		case 1: // AF_UNIX
-			path := int8ToString(unixPath[:])
+			path := int8ToString(evt.UnixPath[:])
 			if path == "" {
 				path = "(anonymous/abstract socket)"
 			}
@@ -159,7 +174,7 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		case 2: // AF_INET
 			ip := make(net.IP, 4)
-			binary.LittleEndian.PutUint32(ip, daddr)
+			binary.LittleEndian.PutUint32(ip, evt.Daddr)
 			if isLoopback(ip) {
 				return
 			}
@@ -167,20 +182,17 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 
 		case 10: // AF_INET6
 			ip := make(net.IP, 16)
-			copy(ip, daddr6[:])
+			copy(ip, evt.Daddr6[:])
 			if isLoopback(ip) {
 				return
 			}
 			destIP = "[" + ip.String() + "]"
 
 		default:
-			destIP = fmt.Sprintf("(unknown address family %d)", family)
+			destIP = fmt.Sprintf("(unknown address family %d)", evt.Family)
 		}
 
-		r.engine.AnalyzeNetworkEgress(
-			string(et.String()), hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
-			hdr.CgroupId, destIP, destPort, ancestorSuspicious, ancestorFilename,
-		)
+		r.engine.AnalyzeNetworkEgress(meta, et.String(), destIP, destPort)
 
 	case kebpf.EventNsChange:
 		var evt kebpf.BPFNsChangeEvent
@@ -189,10 +201,7 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		r.engine.AnalyzeNsChange(
-			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId,
-			evt.Op, evt.Flags, evt.Nstype, ancestorSuspicious, ancestorFilename,
-		)
+		r.engine.AnalyzeNsChange(meta, evt.Op, evt.Flags, evt.Nstype)
 
 	case kebpf.EventOpenSensitive, kebpf.EventMemfd, kebpf.EventSensitiveWrite:
 		var evt kebpf.BPFOpenEvent
@@ -202,26 +211,30 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		}
 
 		uncleanfilename := int8ToString(evt.Filename[:])
-		filename := resolveAbsolutePath(hdr.Pid, uncleanfilename)
-		pathTruncated := evt.PathTruncated == 1
+		meta.Filename = resolveAbsolutePath(hdr.Pid, uncleanfilename)
+		meta.PathTruncated = evt.PathTruncated == 1
 
 		switch et {
 		case kebpf.EventOpenSensitive:
-			r.engine.AnalyzeGeneric("OPEN_SENSITIVE", config.SeverityHigh, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
+			r.engine.AnalyzeGeneric(meta, "OPEN_SENSITIVE", config.SeverityHigh, "")
 		case kebpf.EventMemfd:
-			r.engine.AnalyzeGeneric("MEMFD_CREATE", config.SeverityHigh, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, filename, "", ancestorSuspicious, ancestorFilename, pathTruncated)
+			r.engine.AnalyzeGeneric(meta, "MEMFD_CREATE", config.SeverityHigh, "")
 		case kebpf.EventSensitiveWrite:
-			r.engine.AnalyzeGeneric("SENSITIVE_WRITE", config.SeverityCritical, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, filename, fmt.Sprintf("open flags=0x%x (write intent on protected path)", hdr.Ret), ancestorSuspicious, ancestorFilename, pathTruncated)
+			detail := fmt.Sprintf("open flags=0x%x (write intent on protected path)", hdr.Ret)
+			r.engine.AnalyzeGeneric(meta, "SENSITIVE_WRITE", config.SeverityCritical, detail)
 		}
 
 	case kebpf.EventPtrace:
-		r.engine.AnalyzeGeneric("PTRACE", config.SeverityMedium, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", fmt.Sprintf("ptrace request=%d", hdr.Ret), ancestorSuspicious, ancestorFilename, false)
+		detail := fmt.Sprintf("ptrace request=%d", hdr.Ret)
+		r.engine.AnalyzeGeneric(meta, "PTRACE", config.SeverityMedium, detail)
 
 	case kebpf.EventSetuid:
-		r.engine.AnalyzeGeneric("SETUID", config.SeverityMedium, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", fmt.Sprintf("target uid=%d", hdr.Ret), ancestorSuspicious, ancestorFilename, false)
+		detail := fmt.Sprintf("target uid=%d", hdr.Ret)
+		r.engine.AnalyzeGeneric(meta, "SETUID", config.SeverityMedium, detail)
 
 	case kebpf.EventModuleLoad:
-		r.engine.AnalyzeGeneric("MODULE_LOAD", config.SeverityCritical, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, hdr.CgroupId, "", "", ancestorSuspicious, ancestorFilename, false)
+		r.engine.AnalyzeGeneric(meta, "MODULE_LOAD", config.SeverityCritical, "")
+
 	case kebpf.EventWriteBlocked:
 		var evt kebpf.BPFOpenEvent
 		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
@@ -229,13 +242,10 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		filename := int8ToString(evt.Filename[:])
-		pathTruncated := evt.PathTruncated == 1
+		meta.Filename = int8ToString(evt.Filename[:])
+		meta.PathTruncated = evt.PathTruncated == 1
 
-		r.engine.AnalyzeWriteBlocked(
-			comm, filename, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
-			hdr.CgroupId, ancestorSuspicious, ancestorFilename, pathTruncated,
-		)
+		r.engine.AnalyzeWriteBlocked(meta)
 
 	case kebpf.EventPtraceBlocked:
 		var evt kebpf.BPFPtraceEvent
@@ -249,11 +259,8 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			targetComm = "UNKNOWN"
 		}
 
-		r.engine.AnalyzePtraceBlocked(
-			comm, targetComm, uint32(evt.TargetPid), uint32(evt.Mode),
-			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, hdr.CgroupId,
-			ancestorSuspicious, ancestorFilename,
-		)
+		r.engine.AnalyzePtraceBlocked(meta, targetComm, uint32(evt.TargetPid), uint32(evt.Mode))
+
 	case kebpf.EventKmodBlocked:
 		var evt kebpf.BPFKmodEvent
 		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
@@ -261,18 +268,12 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		comm := int8ToString(evt.Hdr.Comm[:])
+		if kmodComm := int8ToString(evt.Hdr.Comm[:]); kmodComm != "" {
+			meta.Comm = kmodComm
+		}
 
-		r.engine.AnalyzeKmodBlocked(
-			comm,
-			hdr.Pid,
-			hdr.Ppid,
-			hdr.Uid,
-			hdr.Gid,
-			hdr.CgroupId,
-			ancestorSuspicious,
-			ancestorFilename,
-		)
+		r.engine.AnalyzeKmodBlocked(meta)
+
 	case kebpf.EventIoUring:
 		var evt kebpf.BPFIouringEvent
 		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
@@ -280,8 +281,8 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		filename := int8ToString(evt.Filename[:])
-		r.engine.AnalyzeIoUring(hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm, filename, hdr.CgroupId, evt.Opcode, ancestorSuspicious, ancestorFilename)
+		meta.Filename = int8ToString(evt.Filename[:])
+		r.engine.AnalyzeIoUring(meta, evt.Opcode)
 
 	case kebpf.EventLpeBlocked:
 		var evt kebpf.BPFLpeEvent
@@ -290,18 +291,7 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		r.engine.AnalyzeLpeBlocked(
-			comm,
-			hdr.Pid,
-			hdr.Ppid,
-			hdr.Uid,
-			hdr.Gid,
-			hdr.CgroupId,
-			evt.OldUid,
-			evt.NewUid,
-			ancestorSuspicious,
-			ancestorFilename,
-		)
+		r.engine.AnalyzeLpeBlocked(meta, evt.OldUid, evt.NewUid)
 
 	case kebpf.EventBranchMispredict:
 		var evt kebpf.BPFPmuEvent
@@ -310,10 +300,7 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			return
 		}
 
-		r.engine.AnalyzePmu(
-			hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid, comm,
-			hdr.CgroupId, evt.MispredCount, ancestorSuspicious, ancestorFilename,
-		)
+		r.engine.AnalyzePmu(meta, evt.MispredCount)
 
 	case kebpf.EventDnsAnswer:
 		var evt kebpf.BPFDnsAnswerEvent
@@ -351,18 +338,14 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		}
 
 		uncleanfilename := int8ToString(evt.Filename[:])
-		filename := resolveAbsolutePath(hdr.Pid, uncleanfilename)
-		if filename == "" {
-			filename = "UNKNOWN_OR_EMPTY"
+		meta.Filename = resolveAbsolutePath(hdr.Pid, uncleanfilename)
+		if meta.Filename == "" {
+			meta.Filename = "UNKNOWN_OR_EMPTY"
 		}
-		args := parseArgs(evt.Args[:])
+		meta.Args = parseArgs(evt.Args[:])
 
-		r.engine.AnalyzeReverseShell(
-			comm, filename, args, hdr.Pid, hdr.Ppid, hdr.Uid, hdr.Gid,
-			hdr.CgroupId, ancestorSuspicious, ancestorFilename,
-		)
+		r.engine.AnalyzeReverseShell(meta)
 	}
-
 }
 
 // This function is used to handle C type strings ending with \x00
@@ -448,4 +431,40 @@ func parseDNSQName(raw []int8) string {
 		return ""
 	}
 	return strings.Join(labels, ".")
+}
+
+func (m ProcessMeta) ToAlert(eventType string, sev config.Severity, act config.Action, detail string) alert.Alert {
+	return alert.Alert{
+		EventType:          eventType,
+		Severity:           string(sev),
+		Action:             string(act),
+		Pid:                m.PID,
+		Ppid:               m.PPID,
+		Uid:                m.UID,
+		Gid:                m.GID,
+		Comm:               m.Comm,
+		CgroupID:           m.CgroupID,
+		Filename:           m.Filename,
+		Args:               m.Args,
+		AncestorSuspicious: m.AncestorSuspicious,
+		AncestorFilename:   m.AncestorFilename,
+		PathTruncated:      m.PathTruncated,
+		Detail:             detail,
+	}
+}
+
+func (m ProcessMeta) ToAuditRecord(decision audit.Decision, eventType, ruleName string, mitre *config.MitreMeta, target, reason string) audit.Record {
+	return audit.Record{
+		Decision:  decision,
+		EventType: eventType,
+		RuleName:  ruleName,
+		Mitre:     mitre,
+		PID:       m.PID,
+		PPID:      m.PPID,
+		UID:       m.UID,
+		Comm:      m.Comm,
+		CgroupID:  m.CgroupID,
+		Target:    target,
+		Reason:    reason,
+	}
 }

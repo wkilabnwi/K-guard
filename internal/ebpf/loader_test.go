@@ -23,7 +23,7 @@ func TestEventType_String(t *testing.T) {
 		{EventWriteBlocked, "WRITE_BLOCKED"},
 		{EventPtraceBlocked, "PTRACE_BLOCKED"},
 		{EventKmodBlocked, "KMOD_BLOCKED"},
-		{EventIoUring, "IOURING"},
+		{EventIoUring, "IO_URING"},
 		{EventType(999), "UNKNOWN"},
 	}
 
