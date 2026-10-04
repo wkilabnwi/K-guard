@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -42,25 +42,26 @@ func (w *WebhookSink) Send(a Alert) {
 
 	body, err := json.Marshal(webhookPayload{Text: summary, Alert: a})
 	if err != nil {
-		log.Printf("[webhook] marshal error: %v", err)
+		slog.Error("webhook payload marshal failed", "component", "webhook", "error", err)
 		return
 	}
 
 	req, err := http.NewRequest(http.MethodPost, w.url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[webhook] request build error: %v", err)
+		slog.Error("webhook request build failed", "component", "webhook", "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := w.client.Do(req)
 	if err != nil {
-		log.Printf("[webhook] delivery failed: %v", err)
+		slog.Error("webhook delivery failed", "component", "webhook", "error", err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+
 	if resp.StatusCode >= 300 {
-		log.Printf("[webhook] endpoint returned status %d", resp.StatusCode)
+		slog.Warn("webhook endpoint returned non-success status code", "component", "webhook", "status_code", resp.StatusCode)
 	}
 }
 
@@ -95,25 +96,25 @@ func (s *SlackSink) Send(a Alert) {
 
 	body, err := json.Marshal(slackPayload{Text: msg})
 	if err != nil {
-		log.Printf("[slack] marshal error: %v", err)
+		slog.Error("slack payload marshal failed", "component", "slack", "error", err)
 		return
 	}
 
 	req, err := http.NewRequest(http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[slack] request build error: %v", err)
+		slog.Error("slack request build failed", "component", "slack", "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		log.Printf("[slack] delivery failed: %v", err)
+		slog.Error("slack delivery failed", "component", "slack", "error", err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
-		log.Printf("[slack] endpoint returned status %d", resp.StatusCode)
+		slog.Warn("slack endpoint returned non-success status code", "component", "slack", "status_code", resp.StatusCode)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -114,7 +114,7 @@ func resolveToken(envVar, cfgVal string) string {
 }
 
 func runSupervisor(configPath string) {
-	log.Println("[supervisor] Starting K-Guard supervisor process...")
+	slog.Info("starting K-Guard supervisor process", "component", "supervisor")
 
 	const maxRestarts = 5
 	const windowDuration = 5 * time.Minute
@@ -136,7 +136,11 @@ func runSupervisor(configPath string) {
 
 		// Rate-limit check: Fail Open if crashing repeatedly
 		if len(restartTimestamps) >= maxRestarts {
-			log.Fatalf("[EMERGENCY] K-Guard crashed %d times within %v. Exiting supervisor to preserve host stability (failing open).", maxRestarts, windowDuration)
+			slog.Error("EMERGENCY: worker crashed repeatedly within rate-limit window; failing open to preserve host stability",
+				"component", "supervisor",
+				"max_restarts", maxRestarts,
+				"window", windowDuration,
+			)
 		}
 
 		args := []string{"-config", configPath, "-child-worker"}
@@ -146,10 +150,11 @@ func runSupervisor(configPath string) {
 		cmd.Stdin = os.Stdin
 
 		if err := cmd.Start(); err != nil {
-			log.Fatalf("[supervisor] Failed to start child worker process: %v", err)
+			slog.Error("failed to start child worker process", "component", "supervisor", "error", err)
+			os.Exit(1)
 		}
 
-		log.Printf("[supervisor] Spawned worker process (PID: %d)", cmd.Process.Pid)
+		slog.Info("spawned worker process", "component", "supervisor", "pid", cmd.Process.Pid)
 
 		childDone := make(chan error, 1)
 		go func() {
@@ -158,7 +163,7 @@ func runSupervisor(configPath string) {
 
 		select {
 		case sig := <-sigCh:
-			log.Printf("[supervisor] Received signal %v, forwarding to child (PID: %d)...", sig, cmd.Process.Pid)
+			slog.Info("forwarding signal to child worker", "component", "supervisor", "signal", sig, "pid", cmd.Process.Pid)
 			if sig == syscall.SIGHUP {
 				// Forward SIGHUP for hot-reload without restarting process
 				_ = cmd.Process.Signal(syscall.SIGHUP)
@@ -167,28 +172,28 @@ func runSupervisor(configPath string) {
 			// Graceful exit: forward signal and wait for child to unhook eBPF
 			_ = cmd.Process.Signal(sig)
 			<-childDone
-			log.Println("[supervisor] Child process exited cleanly. Supervisor shutting down.")
+			slog.Info("child process exited cleanly; supervisor shutting down", "component", "supervisor")
 			return
 
 		case err := <-childDone:
 			restartTimestamps = append(restartTimestamps, time.Now())
 			if err != nil {
-				log.Printf("[supervisor] WARNING: Worker process (PID %d) exited unexpectedly: %v", cmd.Process.Pid, err)
+				slog.Warn("worker process exited unexpectedly", "component", "supervisor", "pid", cmd.Process.Pid, "error", err)
 			} else {
-				log.Printf("[supervisor] Worker process (PID %d) exited cleanly (status 0)", cmd.Process.Pid)
+				slog.Info("worker process exited cleanly", "component", "supervisor", "pid", cmd.Process.Pid)
 				return
 			}
 		}
 
 		time.Sleep(1 * time.Second)
-		log.Println("[supervisor] Restarting worker process...")
+		slog.Info("restarting worker process...", "component", "supervisor")
 	}
 }
 
 func processRecordSafely(r *processor.Router, raw []byte) {
 	defer func() {
 		if err := recover(); err != nil {
-			log.Printf("[EMERGENCY] Recovered from event processing panic: %v", err)
+			slog.Error("EMERGENCY: recovered from event processing panic", "component", "main", "panic", err)
 		}
 	}()
 	r.ProcessRawRecord(raw)
@@ -205,17 +210,20 @@ func main() {
 	convertSigmaPath := flag.String("convert-sigma", "", "path to a Sigma rule YAML file to transpile to K-Guard CEL rule format")
 	flag.Parse()
 
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	slog.SetDefault(slog.New(handler))
+
 	if *convertSigmaPath != "" {
 		rule, err := config.ConvertSigmaFile(*convertSigmaPath)
 		if err != nil {
-			log.Fatalf("Sigma conversion error: %v", err)
+			slog.Error("Sigma conversion error", "error", err)
 		}
 
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.SetEscapeHTML(false)
 		if err := enc.Encode(rule); err != nil {
-			log.Fatalf("Failed to encode rule: %v", err)
+			slog.Error("failed to encode rule", "error", err)
 		}
 		os.Exit(0)
 	}
@@ -226,9 +234,9 @@ func main() {
 	}
 
 	if *childWorker {
-		log.Println("[worker] Running under K-Guard supervisor protection")
+		slog.Info("running under K-Guard supervisor protection", "mode", "worker")
 	} else {
-		log.Println("[worker] Running in standalone mode")
+		slog.Info("running in standalone mode", "mode", "standalone")
 	}
 
 	if *showVersion {
@@ -239,18 +247,23 @@ func main() {
 	if *checkOnly {
 		c, err := config.Load(*configPath)
 		if err != nil {
-			log.Printf("INVALID: %v", err)
+			slog.Error("config validation failed", "path", *configPath, "error", err)
 			os.Exit(1)
 		}
-		log.Printf("OK: %s is valid (%d rules, %d allowlist entries, enforcement=%v)",
-			*configPath, len(c.Rules), len(c.Allowlist), c.EnforcementEnabled)
+		slog.Info("config is valid",
+			"path", *configPath,
+			"rules_count", len(c.Rules),
+			"allowlist_count", len(c.Allowlist),
+			"enforcement_enabled", c.EnforcementEnabled,
+		)
 		os.Exit(0)
 	}
 
 	if *testRuleExpr != "" {
 		celEnv, err := config.GetCELEnvironment()
 		if err != nil {
-			log.Fatalf("Failed to initialize CEL env: %v", err)
+			slog.Error("failed to initialize CEL env", "error", err)
+			os.Exit(1)
 		}
 
 		var mockData map[string]any
@@ -261,12 +274,14 @@ func main() {
 			} else {
 				rawBytes, err = os.ReadFile(*testRuleEvent)
 				if err != nil {
-					log.Fatalf("Failed to read test-event file: %v", err)
+					slog.Error("failed to read test-event file", "error", err)
+					os.Exit(1)
 				}
 			}
 
 			if err := json.Unmarshal(rawBytes, &mockData); err != nil {
-				log.Fatalf("Failed to parse test-event JSON: %v", err)
+				slog.Error("failed to parse test-event JSON", "error", err)
+				os.Exit(1)
 			}
 		} else {
 			mockData = processor.DefaultMockEvent()
@@ -290,11 +305,12 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Println("Initializing K-Guard...")
+	slog.Info("initializing K-Guard daemon...")
 
 	cfgMgr, err := config.NewManager(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config %s: %v", *configPath, err)
+		slog.Error("failed to load config", "path", *configPath, "error", err)
+		os.Exit(1)
 	}
 	stopWatch := make(chan struct{})
 	cfgMgr.WatchPoll(5*time.Second, stopWatch)
@@ -302,7 +318,8 @@ func main() {
 
 	mgr, err := kebpf.NewManager()
 	if err != nil {
-		log.Fatalf("Failed to initialize eBPF: %v", err)
+		slog.Error("failed to initialize eBPF manager", "error", err)
+		os.Exit(1)
 	}
 	defer mgr.Close()
 
@@ -325,7 +342,7 @@ func main() {
 
 	k8sResolver.SetOnContainerDiscovered(func(cgroupID uint64) {
 		if err := mgr.AddContainerCgroup(cgroupID); err != nil {
-			log.Printf("[main] failed to sync container cgroup %d to eBPF map: %v", cgroupID, err)
+			slog.Error("failed to sync container cgroup to eBPF map", "cgroup_id", cgroupID, "error", err)
 		}
 	})
 
@@ -334,7 +351,7 @@ func main() {
 	}
 	if cfg.Sinks.Syslog {
 		if s, err := alert.NewSyslogSink(); err != nil {
-			log.Printf("[main] syslog sink disabled: %v", err)
+			slog.Warn("syslog sink disabled", "error", err)
 		} else {
 			dispatcher.Register(s)
 		}
@@ -349,7 +366,7 @@ func main() {
 	if cfg.Sinks.StorePath != "" {
 		store, err = alert.NewStore(cfg.Sinks.StorePath)
 		if err != nil {
-			log.Printf("[main] persistent store disabled: %v", err)
+			slog.Warn("persistent store disabled", "error", err)
 		} else {
 			dispatcher.Register(store)
 			defer func() { _ = store.Close() }()
@@ -360,9 +377,7 @@ func main() {
 	if cfg.Sinks.MetricsListenAddr != "" {
 		metricsToken := resolveToken("KGUARD_METRICS_TOKEN", cfg.Sinks.MetricsAuthToken)
 		if metricsToken == "" {
-			log.Printf("[metrics] WARNING: no auth token configured, metrics on %s are unauthenticated. "+
-				"Set sinks.metrics_auth_token (or KGUARD_METRICS_TOKEN) or restrict %s to loopback/a trusted network.",
-				cfg.Sinks.MetricsListenAddr, cfg.Sinks.MetricsListenAddr)
+			slog.Warn("unauthenticated metrics endpoint enabled", "listen_addr", cfg.Sinks.MetricsListenAddr)
 		}
 
 		mux := http.NewServeMux()
@@ -381,9 +396,9 @@ func main() {
 			IdleTimeout:       60 * time.Second,
 		}
 		go func() {
-			log.Printf("[metrics] listening on %s/metrics", cfg.Sinks.MetricsListenAddr)
+			slog.Info("metrics HTTP listener started", "path", "/metrics", "listen_addr", cfg.Sinks.MetricsListenAddr)
 			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("[metrics] server stopped: %v", err)
+				slog.Error("metrics server stopped unexpectedly", "error", err)
 			}
 		}()
 	}
@@ -391,7 +406,7 @@ func main() {
 	var dashboardSrv *dashboard.Server
 	if cfg.Sinks.DashboardListenAddr != "" {
 		if store == nil {
-			log.Printf("[main] dashboard requested but sinks.store_path is not set, dashboard needs the persistent store to show history, skipping dashboard")
+			slog.Warn("dashboard requested but sinks.store_path is not set; skipping dashboard startup")
 		} else {
 			dashboardToken := resolveToken("KGUARD_DASHBOARD_TOKEN", cfg.Sinks.DashboardAuthToken)
 			dashboardSrv = dashboard.NewServer(cfg.Sinks.DashboardListenAddr, store, statusAdapter{mgr}, dashboardToken)
@@ -402,21 +417,21 @@ func main() {
 	telemetryChan := make(chan processor.MLRecord, 10000)
 	datasetPath := "/var/lib/kguard/telemetry.bin"
 	if col, err := dataset.NewCollector(datasetPath); err != nil {
-		log.Printf("[dataset] collector disabled: %v", err)
+		slog.Warn("telemetry collector disabled", "error", err)
 	} else {
 		col.Start(telemetryChan)
-		log.Printf("[dataset] recording ML telemetry to %s", datasetPath)
+		slog.Info("recording ML telemetry", "path", datasetPath)
 	}
 
 	var auditLogger *audit.Logger
 	if cfg.Sinks.AuditLogPath != "" {
 		al, err := audit.NewLogger(cfg.Sinks.AuditLogPath)
 		if err != nil {
-			log.Printf("[main] audit log disabled: %v", err)
+			slog.Warn("audit logger disabled", "error", err)
 		} else {
 			auditLogger = al
 			defer func() { _ = auditLogger.Close() }()
-			log.Printf("[audit] recording NDJSON audit trail to %s", cfg.Sinks.AuditLogPath)
+			slog.Info("recording NDJSON audit trail", "path", cfg.Sinks.AuditLogPath)
 		}
 	}
 
@@ -435,9 +450,9 @@ func main() {
 	// GoRoutine to handle the reload of the config
 	go func() {
 		for range reloadChan {
-			log.Println("[main] SIGHUP received, reloading config immediately")
+			slog.Info("SIGHUP received, triggering config reload")
 			if err := cfgMgr.ReloadNow(); err != nil {
-				log.Printf("[main] SIGHUP reload failed, keeping previous config: %v", err)
+				slog.Error("SIGHUP reload failed, keeping active config", "error", err)
 			}
 		}
 	}()
@@ -459,20 +474,17 @@ func main() {
 				runtime.ReadMemStats(&m)
 				maxBytes := currentCfg.MaxMemoryMB * 1024 * 1024
 				if m.Alloc > maxBytes {
-					log.Printf("[SAFETY-VALVE] WARNING: Memory usage (%d MB) exceeded max threshold (%d MB). Triggering GC...",
-						m.Alloc/(1024*1024), currentCfg.MaxMemoryMB)
+					slog.Warn("memory safety limit exceeded, triggering GC",
+						"current_mb", m.Alloc/(1024*1024),
+						"max_mb", currentCfg.MaxMemoryMB,
+					)
 					runtime.GC()
 				}
 			}
 		}
 	}()
 
-	log.Println("K-Guard is online. Press Ctrl+C to exit")
-	if mgr.LSMEnabled {
-		log.Println("Mode: PREVENTION (LSM pre-exec blocking active)")
-	} else {
-		log.Println("Mode: DETECTION ONLY (see startup warnings above for why blocked execs will still run to completion before K-Guard can react)")
-	}
+	slog.Info("K-Guard is online", "lsm_enabled", mgr.LSMEnabled)
 
 	// Main GoRoutine
 	wg.Add(1)
@@ -489,7 +501,7 @@ func main() {
 						return
 					}
 					metricsRegistry.IncRingbufDrop()
-					log.Printf("Error reading ringbuf: %v", err)
+					slog.Error("error reading eBPF ringbuffer sample", "error", err)
 					continue
 				}
 				health.touch()
@@ -499,7 +511,7 @@ func main() {
 	}()
 
 	<-stopChan
-	log.Println("Shutting down K-Guard")
+	slog.Info("shutting down K-Guard daemon...")
 
 	close(quit)
 	_ = mgr.Reader.Close()
@@ -509,12 +521,12 @@ func main() {
 	defer cancel()
 	if metricsSrv != nil {
 		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("[metrics] graceful shutdown failed: %v", err)
+			slog.Error("graceful metrics server shutdown failed", "error", err)
 		}
 	}
 	if dashboardSrv != nil {
 		if err := dashboardSrv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("[dashboard] graceful shutdown failed: %v", err)
+			slog.Error("graceful dashboard server shutdown failed", "error", err)
 		}
 	}
 

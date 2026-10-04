@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"k-guard/internal/config"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -61,8 +61,12 @@ func NewKubeletClient(baseURL string, insecureSkipTLS bool, certFile, keyFile st
 		if certFile != "" && keyFile != "" {
 			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 			if err != nil {
-				log.Printf("k8s: failed to load kubelet client cert (%s, %s): %v; "+
-					"proceeding without client cert, kubelet requests may be rejected", certFile, keyFile, err)
+				slog.Warn("failed to load kubelet client cert; proceeding without client cert",
+					"component", "k8s",
+					"cert_file", certFile,
+					"key_file", keyFile,
+					"error", err,
+				)
 			} else {
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}
@@ -190,8 +194,12 @@ func (k *KubeletClient) UpdateConfig(c *config.Config) {
 		if c.KubeletCertFile != "" && c.KubeletKeyFile != "" {
 			cert, err := tls.LoadX509KeyPair(c.KubeletCertFile, c.KubeletKeyFile)
 			if err != nil {
-				log.Printf("k8s: failed to load kubelet client cert on reload (%s, %s): %v; "+
-					"proceeding without client cert", c.KubeletCertFile, c.KubeletKeyFile, err)
+				slog.Warn("failed to load kubelet client cert on reload; proceeding without client cert",
+					"component", "k8s",
+					"cert_file", c.KubeletCertFile,
+					"key_file", c.KubeletKeyFile,
+					"error", err,
+				)
 			} else {
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"k-guard/internal/config"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -62,7 +62,7 @@ func NewResolver(procPath, sysCgroupPath, kubeletURL string, kubeletInsecure boo
 	// so the pod map is warm before any eBPF events hit the resolver
 	syncCtx, syncCancel := context.WithTimeout(r.ctx, 3*time.Second)
 	if err := r.kubelet.SyncPods(syncCtx); err != nil {
-		log.Printf("k8s: initial kubelet pod sync failed: %v; pod metadata cache starts empty", err)
+		slog.Warn("initial kubelet pod sync failed; pod metadata cache starts empty", "component", "k8s", "error", err)
 	}
 	syncCancel()
 

@@ -35,20 +35,20 @@ func diffConfig(old, new *Config) []string {
 
 	changes = append(changes, diffSinks(old.Sinks, new.Sinks)...)
 
+	if old.ProcPath != new.ProcPath {
+		changes = append(changes, fmt.Sprintf("[WARNING] proc_path changed (%q -> %q) but this field is startup-only and requires a process restart", old.ProcPath, new.ProcPath))
+	}
+	if old.CgroupPath != new.CgroupPath {
+		changes = append(changes, fmt.Sprintf("[WARNING] cgroup_path changed (%q -> %q) but this field is startup-only and requires a process restart", old.CgroupPath, new.CgroupPath))
+	}
 	if old.KubeletURL != new.KubeletURL {
-		changes = append(changes, fmt.Sprintf("kubelet_url: %q -> %q", old.KubeletURL, new.KubeletURL))
+		changes = append(changes, fmt.Sprintf("[WARNING] kubelet_url changed (%q -> %q) but updating the kubelet endpoint requires a process restart", old.KubeletURL, new.KubeletURL))
 	}
 	if old.KubeletInsecure != new.KubeletInsecure {
 		changes = append(changes, fmt.Sprintf("kubelet_insecure: %v -> %v", old.KubeletInsecure, new.KubeletInsecure))
 	}
 	if (old.KubeletCertFile != new.KubeletCertFile) || (old.KubeletKeyFile != new.KubeletKeyFile) {
-		changes = append(changes, "kubelet mTLS cert/key changed")
-	}
-	if old.ProcPath != new.ProcPath {
-		changes = append(changes, fmt.Sprintf("proc_path changed in file (%q -> %q) but this key is startup-only and will NOT take effect until restart", old.ProcPath, new.ProcPath))
-	}
-	if old.CgroupPath != new.CgroupPath {
-		changes = append(changes, fmt.Sprintf("cgroup_path changed in file (%q -> %q) but this key is startup-only and will NOT take effect until restart", old.CgroupPath, new.CgroupPath))
+		changes = append(changes, "[WARNING] kubelet mTLS cert/key changed in file; updating client TLS certificates requires a process restart")
 	}
 
 	return changes

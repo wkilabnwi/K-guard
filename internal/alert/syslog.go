@@ -5,7 +5,7 @@ package alert
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"log/syslog"
 	"strings"
 )
@@ -30,7 +30,7 @@ func (s *SyslogSink) Name() string { return "syslog" }
 func (s *SyslogSink) Send(a Alert) {
 	line, err := json.Marshal(a)
 	if err != nil {
-		log.Printf("[syslog] marshal error: %v", err)
+		slog.Error("syslog payload marshal failed", "component", "syslog", "error", err)
 		return
 	}
 
@@ -47,6 +47,6 @@ func (s *SyslogSink) Send(a Alert) {
 		werr = s.writer.Info(msg)
 	}
 	if werr != nil {
-		log.Printf("[syslog] write error: %v", werr)
+		slog.Error("syslog write failed", "component", "syslog", "error", werr)
 	}
 }

@@ -16,19 +16,30 @@ import (
 	"k-guard/internal/trust"
 )
 
-type ProcessMeta struct {
+type EventMeta struct {
+	EventType          kebpf.EventType
+	TimestampNs        uint64
 	PID                uint32
 	PPID               uint32
 	UID                uint32
 	GID                uint32
 	Comm               string
 	CgroupID           uint64
-	Filename           string
-	Args               string
 	AncestorSuspicious bool
 	AncestorFilename   string
-	PathTruncated      bool
-	IsFileless         bool
+	ExeDev             uint64
+	ExeIno             uint64
+	ParentExeDev       uint64
+	ParentExeIno       uint64
+	Ret                int64
+}
+
+type ProcessMeta struct {
+	EventMeta
+	Filename      string
+	Args          string
+	PathTruncated bool
+	IsFileless    bool
 }
 
 func isLoopback(ip net.IP) bool {
@@ -44,19 +55,6 @@ func isIgnoredComm(comms []string, comm string) bool {
 	return false
 }
 
-// Router decodes raw ring buffer samples and dispatches them to the Engine
-// Kept separate from Engine itself so decoding concerns (byte layout,
-// event-type dispatch) don't get tangled up with policy concerns
-type Router struct {
-	engine  *Engine
-	metrics *metrics.Registry
-	cfg     *config.Manager
-
-	ignoredConnect *trust.Set
-
-	telemetryChan chan MLRecord
-}
-
 type MLRecord struct {
 	Timestamp uint64
 	ParentDev uint64
@@ -68,6 +66,20 @@ type MLRecord struct {
 	UID       uint32
 }
 
+type eventHandler func(r *Router, meta EventMeta, raw []byte) error
+
+// Router decodes raw ring buffer samples and dispatches them to the Engine
+// Kept separate from Engine itself so decoding concerns (byte layout,
+// event-type dispatch) don't get tangled up with policy concerns
+type Router struct {
+	engine         *Engine
+	metrics        *metrics.Registry
+	cfg            *config.Manager
+	ignoredConnect *trust.Set
+	telemetryChan  chan MLRecord
+	handlers       map[kebpf.EventType]eventHandler
+}
+
 func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager, telemetryChan chan MLRecord) *Router {
 	r := &Router{
 		engine:         engine,
@@ -76,6 +88,7 @@ func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager, telemet
 		ignoredConnect: trust.NewSet(),
 		telemetryChan:  telemetryChan,
 	}
+	r.initHandlers()
 	r.applyConfig(cfg.Current())
 	cfg.OnChange(r.applyConfig)
 	return r
@@ -85,6 +98,30 @@ func NewRouter(engine *Engine, m *metrics.Registry, cfg *config.Manager, telemet
 // errors are logged via the metrics ring-buffer-drop counter and otherwise
 // swallowed to avoid a malformed record taking down the read loop
 
+func (r *Router) initHandlers() {
+	r.handlers = map[kebpf.EventType]eventHandler{
+		kebpf.EventExec:             decodeExec,
+		kebpf.EventExecBlocked:      decodeExec,
+		kebpf.EventConnect:          decodeNetworkEgress,
+		kebpf.EventSendto:           decodeNetworkEgress,
+		kebpf.EventNsChange:         decodeNsChange,
+		kebpf.EventOpenSensitive:    decodeOpen,
+		kebpf.EventMemfd:            decodeOpen,
+		kebpf.EventSensitiveWrite:   decodeOpen,
+		kebpf.EventPtrace:           decodeGeneric,
+		kebpf.EventSetuid:           decodeGeneric,
+		kebpf.EventModuleLoad:       decodeGeneric,
+		kebpf.EventWriteBlocked:     decodeWriteBlocked,
+		kebpf.EventPtraceBlocked:    decodePtraceBlocked,
+		kebpf.EventKmodBlocked:      decodeKmodBlocked,
+		kebpf.EventIoUring:          decodeIoUring,
+		kebpf.EventLpeBlocked:       decodeLpeBlocked,
+		kebpf.EventBranchMispredict: decodePmu,
+		kebpf.EventDnsAnswer:        decodeDnsAnswer,
+		kebpf.EventReverseShell:     decodeExec,
+	}
+}
+
 func (r *Router) ProcessRawRecord(raw []byte) {
 	var hdr kebpf.BPFEventHdr
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &hdr); err != nil {
@@ -92,7 +129,10 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		return
 	}
 
-	if r.telemetryChan != nil && (hdr.EventType == uint32(kebpf.EventExec) || hdr.EventType == uint32(kebpf.EventExecBlocked)) {
+	et := kebpf.EventType(hdr.EventType)
+	r.metrics.IncEvent(et.String())
+
+	if r.telemetryChan != nil && (et == kebpf.EventExec || et == kebpf.EventExecBlocked) {
 		select {
 		case r.telemetryChan <- MLRecord{
 			Timestamp: hdr.TimestampNs,
@@ -105,20 +145,17 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 			UID:       hdr.Uid,
 		}:
 		default:
-			// Drop under heavy ringbuf load to protect agent latency
 		}
 	}
-
-	et := kebpf.EventType(hdr.EventType)
-	r.metrics.IncEvent(et.String())
 
 	ancestorFilename := int8ToString(hdr.AncestorFilename[:])
 	if ancestorFilename != "" {
 		ancestorFilename = filepath.Clean(ancestorFilename)
 	}
 
-	// Build common baseline ProcessMeta context
-	meta := ProcessMeta{
+	meta := EventMeta{
+		EventType:          et,
+		TimestampNs:        hdr.TimestampNs,
 		PID:                hdr.Pid,
 		PPID:               hdr.Ppid,
 		UID:                hdr.Uid,
@@ -127,225 +164,242 @@ func (r *Router) ProcessRawRecord(raw []byte) {
 		CgroupID:           hdr.CgroupId,
 		AncestorSuspicious: hdr.AncestorSuspicious == 1,
 		AncestorFilename:   ancestorFilename,
+		ExeDev:             hdr.ExeDev,
+		ExeIno:             hdr.ExeIno,
+		ParentExeDev:       hdr.ParentExeDev,
+		ParentExeIno:       hdr.ParentExeIno,
+		Ret:                int64(hdr.Ret),
 	}
 
-	switch et {
-	case kebpf.EventExec, kebpf.EventExecBlocked:
-		var evt kebpf.BPFExecEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
+	handler, exists := r.handlers[et]
+	if !exists {
+		// Default case for unhandled or newly added BPF event types
+		r.metrics.IncDecodeError()
+		return
+	}
+
+	if err := handler(r, meta, raw); err != nil {
+		r.metrics.IncDecodeError()
+	}
+}
+
+// Handler functions (pure decoding & passing normalized structs to Engine)
+
+func decodeExec(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFExecEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+
+	pMeta := ProcessMeta{
+		EventMeta:     meta,
+		Filename:      resolveAbsolutePath(meta.PID, int8ToString(evt.Filename[:])),
+		Args:          parseArgs(evt.Args[:]),
+		PathTruncated: evt.PathTruncated == 1,
+		IsFileless:    evt.IsFileless == 1,
+	}
+	if pMeta.Filename == "" {
+		pMeta.Filename = "UNKNOWN_OR_EMPTY"
+	}
+
+	if meta.EventType == kebpf.EventReverseShell {
+		r.engine.AnalyzeReverseShell(pMeta)
+	} else {
+		r.engine.AnalyzeExec(pMeta, meta.EventType == kebpf.EventExecBlocked)
+	}
+	return nil
+}
+
+func decodeNetworkEgress(r *Router, meta EventMeta, raw []byte) error {
+	exeID := trust.FileID{Dev: meta.ExeDev, Ino: meta.ExeIno}
+	if r.ignoredConnect.Contains(exeID) {
+		return nil
+	}
+
+	var evt kebpf.BPFConnectEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+
+	var destIP string
+	destPort := evt.Dport
+
+	switch evt.Family {
+	case 1:
+		path := int8ToString(evt.UnixPath[:])
+		if path == "" {
+			path = "(anonymous/abstract socket)"
 		}
-
-		uncleanfilename := int8ToString(evt.Filename[:])
-		meta.Filename = resolveAbsolutePath(hdr.Pid, uncleanfilename)
-		if meta.Filename == "" {
-			meta.Filename = "UNKNOWN_OR_EMPTY"
+		destIP = "unix:" + path
+		destPort = 0
+	case 2:
+		ip := make(net.IP, 4)
+		binary.LittleEndian.PutUint32(ip, evt.Daddr)
+		if isLoopback(ip) {
+			return nil
 		}
-		meta.Args = parseArgs(evt.Args[:])
-		meta.PathTruncated = evt.PathTruncated == 1
-		meta.IsFileless = evt.IsFileless == 1
-
-		r.engine.AnalyzeExec(meta, et == kebpf.EventExecBlocked)
-
-	case kebpf.EventConnect, kebpf.EventSendto:
-		exeID := trust.FileID{Dev: hdr.ExeDev, Ino: hdr.ExeIno}
-		if r.ignoredConnect.Contains(exeID) {
-			return
+		destIP = ip.String()
+	case 10:
+		ip := make(net.IP, 16)
+		copy(ip, evt.Daddr6[:])
+		if isLoopback(ip) {
+			return nil
 		}
+		destIP = "[" + ip.String() + "]"
+	default:
+		destIP = fmt.Sprintf("(unknown address family %d)", evt.Family)
+	}
 
-		var evt kebpf.BPFConnectEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
+	pMeta := ProcessMeta{EventMeta: meta}
+	r.engine.AnalyzeNetworkEgress(pMeta, meta.EventType.String(), destIP, destPort)
+	return nil
+}
 
-		var destIP string
-		destPort := evt.Dport
+func decodeNsChange(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFNsChangeEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	r.engine.AnalyzeNsChange(ProcessMeta{EventMeta: meta}, evt.Op, evt.Flags, evt.Nstype)
+	return nil
+}
 
-		switch evt.Family {
-		case 1: // AF_UNIX
-			path := int8ToString(evt.UnixPath[:])
-			if path == "" {
-				path = "(anonymous/abstract socket)"
-			}
-			destIP = "unix:" + path
-			destPort = 0
+func decodeOpen(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFOpenEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	pMeta := ProcessMeta{
+		EventMeta:     meta,
+		Filename:      resolveAbsolutePath(meta.PID, int8ToString(evt.Filename[:])),
+		PathTruncated: evt.PathTruncated == 1,
+	}
 
-		case 2: // AF_INET
-			ip := make(net.IP, 4)
-			binary.LittleEndian.PutUint32(ip, evt.Daddr)
-			if isLoopback(ip) {
-				return
-			}
-			destIP = ip.String()
+	switch meta.EventType {
+	case kebpf.EventOpenSensitive:
+		r.engine.AnalyzeGeneric(pMeta, "OPEN_SENSITIVE", config.SeverityHigh, "")
+	case kebpf.EventMemfd:
+		r.engine.AnalyzeGeneric(pMeta, "MEMFD_CREATE", config.SeverityHigh, "")
+	case kebpf.EventSensitiveWrite:
+		detail := fmt.Sprintf("open flags=0x%x (write intent on protected path)", meta.Ret)
+		r.engine.AnalyzeGeneric(pMeta, "SENSITIVE_WRITE", config.SeverityCritical, detail)
+	}
+	return nil
+}
 
-		case 10: // AF_INET6
-			ip := make(net.IP, 16)
-			copy(ip, evt.Daddr6[:])
-			if isLoopback(ip) {
-				return
-			}
-			destIP = "[" + ip.String() + "]"
+func decodeGeneric(r *Router, meta EventMeta, _ []byte) error {
+	pMeta := ProcessMeta{EventMeta: meta}
 
-		default:
-			destIP = fmt.Sprintf("(unknown address family %d)", evt.Family)
-		}
-
-		r.engine.AnalyzeNetworkEgress(meta, et.String(), destIP, destPort)
-
-	case kebpf.EventNsChange:
-		var evt kebpf.BPFNsChangeEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		r.engine.AnalyzeNsChange(meta, evt.Op, evt.Flags, evt.Nstype)
-
-	case kebpf.EventOpenSensitive, kebpf.EventMemfd, kebpf.EventSensitiveWrite:
-		var evt kebpf.BPFOpenEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		uncleanfilename := int8ToString(evt.Filename[:])
-		meta.Filename = resolveAbsolutePath(hdr.Pid, uncleanfilename)
-		meta.PathTruncated = evt.PathTruncated == 1
-
-		switch et {
-		case kebpf.EventOpenSensitive:
-			r.engine.AnalyzeGeneric(meta, "OPEN_SENSITIVE", config.SeverityHigh, "")
-		case kebpf.EventMemfd:
-			r.engine.AnalyzeGeneric(meta, "MEMFD_CREATE", config.SeverityHigh, "")
-		case kebpf.EventSensitiveWrite:
-			detail := fmt.Sprintf("open flags=0x%x (write intent on protected path)", hdr.Ret)
-			r.engine.AnalyzeGeneric(meta, "SENSITIVE_WRITE", config.SeverityCritical, detail)
-		}
-
+	switch meta.EventType {
 	case kebpf.EventPtrace:
-		detail := fmt.Sprintf("ptrace request=%d", hdr.Ret)
-		r.engine.AnalyzeGeneric(meta, "PTRACE", config.SeverityMedium, detail)
-
+		detail := fmt.Sprintf("ptrace request=%d", meta.Ret)
+		r.engine.AnalyzeGeneric(pMeta, "PTRACE", config.SeverityMedium, detail)
 	case kebpf.EventSetuid:
-		detail := fmt.Sprintf("target uid=%d", hdr.Ret)
-		r.engine.AnalyzeGeneric(meta, "SETUID", config.SeverityMedium, detail)
-
+		detail := fmt.Sprintf("target uid=%d", meta.Ret)
+		r.engine.AnalyzeGeneric(pMeta, "SETUID", config.SeverityMedium, detail)
 	case kebpf.EventModuleLoad:
-		r.engine.AnalyzeGeneric(meta, "MODULE_LOAD", config.SeverityCritical, "")
-
-	case kebpf.EventWriteBlocked:
-		var evt kebpf.BPFOpenEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		meta.Filename = int8ToString(evt.Filename[:])
-		meta.PathTruncated = evt.PathTruncated == 1
-
-		r.engine.AnalyzeWriteBlocked(meta)
-
-	case kebpf.EventPtraceBlocked:
-		var evt kebpf.BPFPtraceEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		targetComm := int8ToString(evt.TargetComm[:])
-		if targetComm == "" {
-			targetComm = "UNKNOWN"
-		}
-
-		r.engine.AnalyzePtraceBlocked(meta, targetComm, uint32(evt.TargetPid), uint32(evt.Mode))
-
-	case kebpf.EventKmodBlocked:
-		var evt kebpf.BPFKmodEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		if kmodComm := int8ToString(evt.Hdr.Comm[:]); kmodComm != "" {
-			meta.Comm = kmodComm
-		}
-
-		r.engine.AnalyzeKmodBlocked(meta)
-
-	case kebpf.EventIoUring:
-		var evt kebpf.BPFIouringEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		meta.Filename = int8ToString(evt.Filename[:])
-		r.engine.AnalyzeIoUring(meta, evt.Opcode)
-
-	case kebpf.EventLpeBlocked:
-		var evt kebpf.BPFLpeEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		r.engine.AnalyzeLpeBlocked(meta, evt.OldUid, evt.NewUid)
-
-	case kebpf.EventBranchMispredict:
-		var evt kebpf.BPFPmuEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		r.engine.AnalyzePmu(meta, evt.MispredCount)
-
-	case kebpf.EventDnsAnswer:
-		var evt kebpf.BPFDnsAnswerEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		qname := parseDNSQName(evt.Qname[:])
-		if qname == "" {
-			return
-		}
-
-		var ip string
-		switch evt.Family {
-		case 2:
-			b := make(net.IP, 4)
-			binary.LittleEndian.PutUint32(b, evt.Daddr)
-			ip = b.String()
-		case 10:
-			b := make(net.IP, 16)
-			copy(b, evt.Daddr6[:])
-			ip = b.String()
-		default:
-			return
-		}
-
-		r.engine.RecordDNSAnswer(hdr.CgroupId, ip, qname)
-
-	case kebpf.EventReverseShell:
-		var evt kebpf.BPFExecEvent
-		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
-			r.metrics.IncRingbufDrop()
-			return
-		}
-
-		uncleanfilename := int8ToString(evt.Filename[:])
-		meta.Filename = resolveAbsolutePath(hdr.Pid, uncleanfilename)
-		if meta.Filename == "" {
-			meta.Filename = "UNKNOWN_OR_EMPTY"
-		}
-		meta.Args = parseArgs(evt.Args[:])
-
-		r.engine.AnalyzeReverseShell(meta)
+		r.engine.AnalyzeGeneric(pMeta, "MODULE_LOAD", config.SeverityCritical, "")
+	default:
+		r.engine.AnalyzeGeneric(pMeta, meta.EventType.String(), config.SeverityMedium, "")
 	}
+	return nil
+}
+
+func decodeWriteBlocked(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFOpenEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	pMeta := ProcessMeta{
+		EventMeta:     meta,
+		Filename:      int8ToString(evt.Filename[:]),
+		PathTruncated: evt.PathTruncated == 1,
+	}
+	r.engine.AnalyzeWriteBlocked(pMeta)
+	return nil
+}
+
+func decodePtraceBlocked(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFPtraceEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	targetComm := int8ToString(evt.TargetComm[:])
+	if targetComm == "" {
+		targetComm = "UNKNOWN"
+	}
+	r.engine.AnalyzePtraceBlocked(ProcessMeta{EventMeta: meta}, targetComm, uint32(evt.TargetPid), uint32(evt.Mode))
+	return nil
+}
+
+func decodeKmodBlocked(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFKmodEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	pMeta := ProcessMeta{EventMeta: meta}
+	if kmodComm := int8ToString(evt.Hdr.Comm[:]); kmodComm != "" {
+		pMeta.Comm = kmodComm
+	}
+	r.engine.AnalyzeKmodBlocked(pMeta)
+	return nil
+}
+
+func decodeIoUring(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFIouringEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	pMeta := ProcessMeta{
+		EventMeta: meta,
+		Filename:  int8ToString(evt.Filename[:]),
+	}
+	r.engine.AnalyzeIoUring(pMeta, evt.Opcode)
+	return nil
+}
+
+func decodeLpeBlocked(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFLpeEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	r.engine.AnalyzeLpeBlocked(ProcessMeta{EventMeta: meta}, evt.OldUid, evt.NewUid)
+	return nil
+}
+
+func decodePmu(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFPmuEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	r.engine.AnalyzePmu(ProcessMeta{EventMeta: meta}, evt.MispredCount)
+	return nil
+}
+
+func decodeDnsAnswer(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFDnsAnswerEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+	qname := parseDNSQName(evt.Qname[:])
+	if qname == "" {
+		return nil
+	}
+	var ip string
+	switch evt.Family {
+	case 2:
+		b := make(net.IP, 4)
+		binary.LittleEndian.PutUint32(b, evt.Daddr)
+		ip = b.String()
+	case 10:
+		b := make(net.IP, 16)
+		copy(b, evt.Daddr6[:])
+		ip = b.String()
+	default:
+		return nil
+	}
+	r.engine.RecordDNSAnswer(meta.CgroupID, ip, qname)
+	return nil
 }
 
 // This function is used to handle C type strings ending with \x00

@@ -111,12 +111,7 @@ func (h *execHash) get() (string, error) {
 
 	procPath := "/proc/" + strconv.Itoa(int(h.pid)) + "/exe"
 
-	resolvedPath, err := filepath.EvalSymlinks(procPath)
-	if err != nil {
-		h.err = fmt.Errorf("resolving symlink %s: %w", procPath, err)
-		return "", h.err
-	}
-
+	// Stat first to get inode for cache lookup
 	fi, err := os.Stat(procPath)
 	if err != nil {
 		h.err = fmt.Errorf("stat %s: %w", procPath, err)
@@ -124,13 +119,18 @@ func (h *execHash) get() (string, error) {
 	}
 	inode, mtime, size, ok := statIdentity(fi)
 
-	// Check cache
+	resolvedPath, err := filepath.EvalSymlinks(procPath)
+	if err != nil {
+		resolvedPath = procPath
+	}
+
+	// Fast Path: LRU Cache Hit (Zero File Reads)
 	if cached, exists := globalHashCache.Get(resolvedPath); exists && ok && cached.inode == inode && cached.mtime == mtime && cached.size == size {
 		h.hex = cached.hex
 		return h.hex, nil
 	}
 
-	// Cache miss or stat changed: compute hash from disk
+	// Slow Path: Read binary file and compute SHA-256
 	f, err := os.Open(procPath)
 	if err != nil {
 		h.err = fmt.Errorf("opening %s: %w", procPath, err)

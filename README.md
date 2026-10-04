@@ -109,7 +109,7 @@ rather than a raw map lookup, requires `github.com/cilium/ebpf` v0.17+.
 
 K-Guard supports both **YAML** and **JSON** configuration files (auto-detected via file extension or structural fallback). Configs are reloaded via `SIGHUP` or a 5-second poll loop.
 
-Configuration files are unmarshaled directly into standard Go structs, and CEL ASTs are pre-compiled and initialized once (`sync.Once`) upfront to keep the engine format-agnostic and ultra-fast during runtime evaluation.
+Configuration files are unmarshaled directly into standard Go structs, and CEL ASTs are pre-compiled and initialized once (`sync.Once`) upfront to keep the engine format-agnostic and ultra-fast during runtime evaluation. Type-safe field evaluation (`event`, `process`) is powered by Protocol Buffers bindings generated from `.proto` definitions (`internal/pb`), providing strict schema enforcement at rule compilation time.
 
 ### Rule Structure
 
@@ -226,7 +226,7 @@ background/tunnel noise rather than signal worth alerting on.
 
 When evaluating `sha256` rules:
 - **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
-- **Cross-PID In-Memory Cache**: Hashes are resolved to their canonical disk path and cached in a thread-safe in-memory cache. If multiple processes (across hundreds of PIDs) execute the same binary, only the first process triggers disk I/O, subsequent checks hit RAM instantly.
+- **Cross-PID In-Memory LRU Cache**: Hashes are indexed in a thread-safe LRU cache (`globalHashCache`) keyed by canonical path, inode, mtime, and file size. Subsequent executions across PIDs hit RAM instantly without duplicate disk I/O.
 
 ### Dry-Run / Shadow Mode (`mode: audit`)
 
@@ -353,9 +353,8 @@ rewrite its own `comm` at will and the kernel itself sets `comm` from
 whatever name a binary was exec'd under. K-Guard now resolves each
 configured entry to the real file it points at:
 
-- Each path is opened once (kept pinned via a held file descriptor,
-  not repeatedly re-`stat`'d) and identified by its `(device, inode)`
-  pair : the same identity the kernel's own VFS layer uses.
+- Each path is opened safely via `O_PATH` handles (`O_PATH | O_NONBLOCK | O_CLOEXEC`), kept pinned via a held file descriptor (not repeatedly re-`stat`'d), and identified by its `(device, inode)` pair: the same identity the kernel's own VFS layer uses.
+- Before pinning, K-Guard verifies binary integrity and refuses to trust any file that is not owned by root (`uid == 0`) or is group/world-writable (`mode & 0022 != 0`).
 - `allowed_ptrace_attaches` is enforced entirely in-kernel: the
   `ptrace_access_check` LSM hook resolves the *calling* process's own
   `mm->exe_file` and looks it up directly in a kernel map keyed by
@@ -521,6 +520,8 @@ A `/healthz` endpoint (unauthenticated, no bearer token needed) is served
 alongside `/metrics` for liveness probes, reports uptime, active sensors,
 LSM status, build revision, and seconds since the last event was read from
 the ring buffer.
+
+- **Structured Logging (`slog`)**: All daemon operations emit structured key-value logs tagged with explicit `component` attributes (`engine`, `ebpf`, `trust`, `k8s`, `config`, `dashboard`, `alert`, `audit`).
 
 ## Safety guarantees
 

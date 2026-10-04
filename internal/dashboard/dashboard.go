@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -45,8 +45,10 @@ type Server struct {
 
 func NewServer(addr string, store *alert.Store, status StatusProvider, authToken string) *Server {
 	if authToken == "" {
-		log.Printf("[dashboard] WARNING: no auth token configured, dashboard on %s is unauthenticated. "+
-			"Set sinks.dashboard_auth_token (or KGUARD_DASHBOARD_TOKEN) or restrict %s to loopback/a trusted network.", addr, addr)
+		slog.Warn("no auth token configured, dashboard is unauthenticated",
+			"component", "dashboard",
+			"listen_addr", addr,
+		)
 	}
 	return &Server{addr: addr, store: store, status: status, authToken: authToken}
 }
@@ -67,9 +69,9 @@ func (s *Server) Start() {
 	}
 
 	go func() {
-		log.Printf("[dashboard] listening on %s", s.addr)
+		slog.Info("dashboard server listening", "component", "dashboard", "listen_addr", s.addr)
 		if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[dashboard] stopped: %v", err)
+			slog.Error("dashboard server stopped unexpectedly", "component", "dashboard", "error", err)
 		}
 	}()
 }
@@ -105,7 +107,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := pageTmpl.Execute(w, data); err != nil {
-		log.Printf("[dashboard] template error: %v", err)
+		slog.Error("dashboard template rendering error", "component", "dashboard", "error", err)
 	}
 }
 

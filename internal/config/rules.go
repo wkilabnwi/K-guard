@@ -2,7 +2,8 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"k-guard/internal/types"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -23,30 +24,19 @@ const (
 	BlockModeAudit   uint8 = 2
 )
 
-type Severity string
+type Severity = types.Severity
+type Action = types.Action
+type MitreMeta = types.MitreMeta
 
 const (
-	SeverityLow      Severity = "low"
-	SeverityMedium   Severity = "medium"
-	SeverityHigh     Severity = "high"
-	SeverityCritical Severity = "critical"
-)
+	SeverityLow      = types.SeverityLow
+	SeverityMedium   = types.SeverityMedium
+	SeverityHigh     = types.SeverityHigh
+	SeverityCritical = types.SeverityCritical
 
-var severityRank = map[Severity]int{
-	SeverityLow:      1,
-	SeverityMedium:   2,
-	SeverityHigh:     3,
-	SeverityCritical: 4,
-}
-
-func (s Severity) Rank() int { return severityRank[s] }
-
-type Action string
-
-const (
-	ActionAlert Action = "ALERT"
-	ActionKill  Action = "KILL"
-	ActionBlock Action = "BLOCK"
+	ActionAlert        = types.ActionAlert
+	ActionKill  Action = types.ActionKill
+	ActionBlock Action = types.ActionBlock
 )
 
 // ProcessContext is exposed inside CEL expressions under process.*
@@ -156,7 +146,10 @@ func (r *Rule) Validate(celEnv *cel.Env) error {
 			}
 			r.ExactBlockPrefix = p
 		} else {
-			log.Printf("[config] rule %q: BLOCK expression is not a simple path match, enforced post-exec (KILL) only", r.Name)
+			slog.Info("rule BLOCK expression is not a simple path match; enforced post-exec (KILL) only",
+				"component", "config",
+				"rule", r.Name,
+			)
 		}
 	}
 
@@ -200,6 +193,7 @@ type Config struct {
 	KubeletInsecure          bool        `yaml:"kubelet_insecure,omitempty" json:"kubelet_insecure,omitempty"`
 	KubeletCertFile          string      `yaml:"kubelet_cert_file,omitempty" json:"kubelet_cert_file,omitempty"`
 	KubeletKeyFile           string      `yaml:"kubelet_key_file,omitempty" json:"kubelet_key_file,omitempty"`
+	requiresSHA256           bool        `yaml:"-" json:"-"`
 }
 
 func (c *Config) applyDefaults() {
@@ -212,10 +206,14 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) Validate(celEnv *cel.Env) error {
+	c.requiresSHA256 = false
 	seen := make(map[string]struct{}, len(c.Rules))
 	for i := range c.Rules {
 		if err := c.Rules[i].Validate(celEnv); err != nil {
 			return err
+		}
+		if strings.Contains(strings.ToLower(c.Rules[i].Expression), "sha256") {
+			c.requiresSHA256 = true
 		}
 		name := c.Rules[i].Name
 		if _, dup := seen[name]; dup {
@@ -308,4 +306,8 @@ func (c *Config) BlockedPrefix() map[string]uint8 {
 		}
 	}
 	return out
+}
+
+func (c *Config) RequiresSHA256() bool {
+	return c.requiresSHA256
 }

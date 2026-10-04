@@ -163,13 +163,20 @@ func TestEngine_AnalyzeExec(t *testing.T) {
 	eng, sink, _ := setupTestEngine(t)
 
 	// Allowlisted execution should generate no alerts
-	eng.AnalyzeExec(ProcessMeta{Comm: "trusted", Filename: "/usr/bin/trusted", PID: 500, PPID: 1, UID: 0, GID: 0, CgroupID: 1}, false)
+	eng.AnalyzeExec(ProcessMeta{
+		EventMeta: EventMeta{Comm: "trusted", PID: 500, PPID: 1, UID: 0, GID: 0, CgroupID: 1},
+		Filename:  "/usr/bin/trusted",
+	}, false)
 	if len(sink.Alerts()) != 0 {
 		t.Fatalf("expected 0 alerts for allowlisted executable, got %d", len(sink.Alerts()))
 	}
 
 	// Rule Match Alert action
-	eng.AnalyzeExec(ProcessMeta{Comm: "nc", Filename: "/usr/bin/nc", PID: 501, PPID: 1, UID: 1000, GID: 1000, CgroupID: 1, Args: "-e /bin/sh"}, false)
+	eng.AnalyzeExec(ProcessMeta{
+		EventMeta: EventMeta{Comm: "nc", PID: 501, PPID: 1, UID: 1000, GID: 1000, CgroupID: 1},
+		Filename:  "/usr/bin/nc",
+		Args:      "-e /bin/sh",
+	}, false)
 	alerts := waitForAlerts(sink, 1)
 	if len(alerts) != 1 {
 		t.Fatalf("expected 1 alert for nc execution, got %d", len(alerts))
@@ -179,7 +186,11 @@ func TestEngine_AnalyzeExec(t *testing.T) {
 	}
 
 	// Fileless Execution
-	eng.AnalyzeExec(ProcessMeta{Comm: "memfd_proc", Filename: "memfd:malware (deleted)", PID: 502, PPID: 1, UID: 0, GID: 0, CgroupID: 1, IsFileless: true}, false)
+	eng.AnalyzeExec(ProcessMeta{
+		EventMeta:  EventMeta{Comm: "memfd_proc", PID: 502, PPID: 1, UID: 0, GID: 0, CgroupID: 1},
+		Filename:   "memfd:malware (deleted)",
+		IsFileless: true,
+	}, false)
 	alerts = waitForAlerts(sink, 2)
 	if len(alerts) != 2 {
 		t.Fatalf("expected 2 alerts total, got %d", len(alerts))
@@ -290,14 +301,14 @@ func TestExecHash_GetSelf(t *testing.T) {
 func TestEngine_GenericAnalyzers(t *testing.T) {
 	eng, sink, _ := setupTestEngine(t)
 
-	eng.AnalyzeNetworkEgress(ProcessMeta{PID: 1001, PPID: 1, UID: 1000, GID: 1000, Comm: "curl", CgroupID: 1, AncestorSuspicious: true, AncestorFilename: "/tmp/bad"}, "CONNECT", "1.1.1.1", 443)
-	eng.AnalyzeGeneric(ProcessMeta{PID: 1002, PPID: 1, UID: 1000, GID: 1000, Comm: "malware", CgroupID: 1, Filename: "/tmp/m"}, "MEMFD_CREATE", config.SeverityHigh, "memfd created")
-	eng.AnalyzeWriteBlocked(ProcessMeta{Comm: "bash", Filename: "/etc/shadow", PID: 1003, PPID: 1, UID: 0, GID: 0, CgroupID: 1})
-	eng.AnalyzePtraceBlocked(ProcessMeta{Comm: "gdb", PID: 1005, PPID: 1, UID: 0, GID: 0, CgroupID: 1}, "target", 1004, 0x1)
-	eng.AnalyzeKmodBlocked(ProcessMeta{Comm: "insmod", PID: 1006, PPID: 1, UID: 0, GID: 0, CgroupID: 1, AncestorSuspicious: true, AncestorFilename: "/tmp/rootkit"})
-	eng.AnalyzeIoUring(ProcessMeta{PID: 1007, PPID: 1, UID: 1000, GID: 1000, Comm: "exploit", CgroupID: 1}, 1)
-	eng.AnalyzeLpeBlocked(ProcessMeta{Comm: "exploit", PID: 1008, PPID: 1, UID: 1000, GID: 1000, CgroupID: 1, AncestorSuspicious: true, AncestorFilename: "/tmp/lpe"}, 1000, 0)
-	eng.AnalyzePmu(ProcessMeta{PID: 1009, PPID: 1, UID: 1000, GID: 1000, Comm: "spectre", CgroupID: 1}, 5000)
+	eng.AnalyzeNetworkEgress(ProcessMeta{EventMeta: EventMeta{PID: 1001, PPID: 1, UID: 1000, GID: 1000, Comm: "curl", CgroupID: 1, AncestorSuspicious: true, AncestorFilename: "/tmp/bad"}}, "CONNECT", "1.1.1.1", 443)
+	eng.AnalyzeGeneric(ProcessMeta{EventMeta: EventMeta{PID: 1002, PPID: 1, UID: 1000, GID: 1000, Comm: "malware", CgroupID: 1}, Filename: "/tmp/m"}, "MEMFD_CREATE", config.SeverityHigh, "memfd created")
+	eng.AnalyzeWriteBlocked(ProcessMeta{EventMeta: EventMeta{Comm: "bash", PID: 1003, PPID: 1, UID: 0, GID: 0, CgroupID: 1}, Filename: "/etc/shadow"})
+	eng.AnalyzePtraceBlocked(ProcessMeta{EventMeta: EventMeta{Comm: "gdb", PID: 1005, PPID: 1, UID: 0, GID: 0, CgroupID: 1}}, "target", 1004, 0x1)
+	eng.AnalyzeKmodBlocked(ProcessMeta{EventMeta: EventMeta{Comm: "insmod", PID: 1006, PPID: 1, UID: 0, GID: 0, CgroupID: 1, AncestorSuspicious: true, AncestorFilename: "/tmp/rootkit"}})
+	eng.AnalyzeIoUring(ProcessMeta{EventMeta: EventMeta{PID: 1007, PPID: 1, UID: 1000, GID: 1000, Comm: "exploit", CgroupID: 1}}, 1)
+	eng.AnalyzeLpeBlocked(ProcessMeta{EventMeta: EventMeta{Comm: "exploit", PID: 1008, PPID: 1, UID: 1000, GID: 1000, CgroupID: 1, AncestorSuspicious: true, AncestorFilename: "/tmp/lpe"}}, 1000, 0)
+	eng.AnalyzePmu(ProcessMeta{EventMeta: EventMeta{PID: 1009, PPID: 1, UID: 1000, GID: 1000, Comm: "spectre", CgroupID: 1}}, 5000)
 
 	alerts := waitForAlerts(sink, 8)
 	if len(alerts) < 8 {
@@ -408,17 +419,19 @@ func TestEngine_AnalyzeExec_BlockedAndTruncated(t *testing.T) {
 
 	// Blocked pre-flight exec with path truncation
 	eng.AnalyzeExec(ProcessMeta{
-		Comm:               "badapp",
-		Filename:           "/tmp/badapp",
-		PID:                601,
-		PPID:               1,
-		UID:                0,
-		GID:                0,
-		CgroupID:           1,
-		Args:               "-v",
-		AncestorSuspicious: true,
-		AncestorFilename:   "/tmp/ancestor",
-		PathTruncated:      true,
+		EventMeta: EventMeta{
+			Comm:               "badapp",
+			PID:                601,
+			PPID:               1,
+			UID:                0,
+			GID:                0,
+			CgroupID:           1,
+			AncestorSuspicious: true,
+			AncestorFilename:   "/tmp/ancestor",
+		},
+		Filename:      "/tmp/badapp",
+		Args:          "-v",
+		PathTruncated: true,
 	}, true)
 
 	alerts := waitForAlerts(sink, 1)
@@ -435,13 +448,15 @@ func TestEngine_AnalyzeExec_SeverityEscalationAndKillAction(t *testing.T) {
 
 	// Trigger rule 'kill-malware' which action is KILL
 	eng.AnalyzeExec(ProcessMeta{
-		Comm:          "malware",
+		EventMeta: EventMeta{
+			Comm:     "malware",
+			PID:      602,
+			PPID:     1,
+			UID:      0,
+			GID:      0,
+			CgroupID: 1,
+		},
 		Filename:      "/tmp/malware",
-		PID:           602,
-		PPID:          1,
-		UID:           0,
-		GID:           0,
-		CgroupID:      1,
 		PathTruncated: true,
 	}, false)
 
@@ -763,13 +778,15 @@ func TestEngine_AnalyzeExec_MitreMetadata(t *testing.T) {
 	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
 
 	eng.AnalyzeExec(ProcessMeta{
-		Comm:     "nc",
+		EventMeta: EventMeta{
+			Comm:     "nc",
+			PID:      701,
+			PPID:     1,
+			UID:      1000,
+			GID:      1000,
+			CgroupID: 1,
+		},
 		Filename: "/usr/bin/nc",
-		PID:      701,
-		PPID:     1,
-		UID:      1000,
-		GID:      1000,
-		CgroupID: 1,
 		Args:     "-e /bin/sh",
 	}, false)
 
@@ -832,15 +849,16 @@ func TestEngine_AnalyzeExec_AuditModePostExecKillSuppression(t *testing.T) {
 	m := metrics.NewRegistry()
 	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
 
-	// Simulate execution matching the audit-mode kill rule
 	eng.AnalyzeExec(ProcessMeta{
-		Comm:     "nmap",
+		EventMeta: EventMeta{
+			Comm:     "nmap",
+			PID:      801,
+			PPID:     1,
+			UID:      1000,
+			GID:      1000,
+			CgroupID: 1,
+		},
 		Filename: "/usr/bin/nmap",
-		PID:      801,
-		PPID:     1,
-		UID:      1000,
-		GID:      1000,
-		CgroupID: 1,
 		Args:     "-sS 192.168.1.1",
 	}, false)
 
@@ -899,17 +917,19 @@ func TestEngine_AnalyzeExec_AuditModePreExecBlocked(t *testing.T) {
 	m := metrics.NewRegistry()
 	eng := NewEngine(cfgMgr, guard, disp, m, nil, nil, nil)
 
-	// Simulate LSM event received when rule was in audit mode
 	eng.AnalyzeExec(ProcessMeta{
-		Comm:     "curl",
+		EventMeta: EventMeta{
+			Comm:     "curl",
+			PID:      802,
+			PPID:     1,
+			UID:      1000,
+			GID:      1000,
+			CgroupID: 1,
+		},
 		Filename: "/usr/bin/curl",
-		PID:      802,
-		PPID:     1,
-		UID:      1000,
-		GID:      1000,
-		CgroupID: 1,
 		Args:     "https://example.com",
 	}, true)
+
 	alerts := waitForAlerts(mockSink, 1)
 	if len(alerts) != 1 {
 		t.Fatalf("expected 1 alert, got %d", len(alerts))
@@ -931,14 +951,16 @@ func TestEngine_AnalyzeReverseShell(t *testing.T) {
 	eng, sink, _ := setupTestEngine(t)
 
 	eng.AnalyzeReverseShell(ProcessMeta{
-		Comm:     "python3",
+		EventMeta: EventMeta{
+			Comm:     "python3",
+			PID:      9001,
+			PPID:     1,
+			UID:      1000,
+			GID:      1000,
+			CgroupID: 1,
+		},
 		Filename: "/usr/bin/dash",
 		Args:     "python3 tst_rvshll.py",
-		PID:      9001,
-		PPID:     1,
-		UID:      1000,
-		GID:      1000,
-		CgroupID: 1,
 	})
 
 	alerts := waitForAlerts(sink, 1)

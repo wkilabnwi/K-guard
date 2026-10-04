@@ -43,12 +43,15 @@ func (g *Guard) SetProtected(pids []int, paths []string) {
 	g.protected.Sync(paths, "protected_comms")
 }
 
+// In safety.go
 func exeIdentity(pid uint32) (trust.FileID, error) {
-	f, err := os.Open(fmt.Sprintf("/proc/%d/exe", pid))
+	path := fmt.Sprintf("/proc/%d/exe", pid)
+	f, err := trust.OpenFileSafely(path)
 	if err != nil {
 		return trust.FileID{}, err
 	}
 	defer func() { _ = f.Close() }()
+
 	var st syscall.Stat_t
 	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
 		return trust.FileID{}, err

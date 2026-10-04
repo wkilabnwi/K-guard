@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package kguard;
+
+option go_package = "k-guard/internal/pb";
+
+message ProcessContext {
+  string path = 1;
+  string basename = 2;
+  string sha256 = 3;
+  int64 pid = 4;
+  int64 ppid = 5;
+  int64 uid = 6;
+  int64 gid = 7;
+  string comm = 8;
+  repeated string args = 9;
+  bool is_fileless = 10;
+}
+
+message EventContext {
+  string type = 1;
+  bool ancestor_suspicious = 2;
+  string ancestor_filename = 3;
+  bool is_suspicious_path = 4;
+  uint64 mispred_count = 5;
+  ProcessContext process = 6;
+}
