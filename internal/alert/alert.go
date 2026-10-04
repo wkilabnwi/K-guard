@@ -5,8 +5,8 @@ package alert
 
 import (
 	"io"
-	"k-guard/internal/config"
-	"log"
+	"k-guard/internal/types"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,12 +17,12 @@ import (
 type Alert struct {
 	Timestamp time.Time `json:"timestamp"`
 
-	RuleName string            `json:"rule_name,omitempty"` // empty for raw sensor events not tied to a named rule
-	Mitre    *config.MitreMeta `json:"mitre,omitempty"`
-	Mode     string            `json:"mode,omitempty"`
-	Severity string            `json:"severity"`
-	Action   string            `json:"action"`
-	Blocked  bool              `json:"blocked"` // true if the LSM hook actually prevented the exec
+	RuleName string           `json:"rule_name,omitempty"` // empty for raw sensor events not tied to a named rule
+	Mitre    *types.MitreMeta `json:"mitre,omitempty"`
+	Mode     string           `json:"mode,omitempty"`
+	Severity string           `json:"severity"`
+	Action   string           `json:"action"`
+	Blocked  bool             `json:"blocked"` // true if the LSM hook actually prevented the exec
 
 	EventType string `json:"event_type"`
 
@@ -91,7 +91,7 @@ func (w *sinkWorker) run() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[alert] sink %s panicked: %v", w.sink.Name(), r)
+					slog.Error("sink panicked during alert processing", "component", "alert", "sink", w.sink.Name(), "panic", r)
 				}
 			}()
 			w.sink.Send(a)
@@ -108,7 +108,7 @@ func (w *sinkWorker) enqueue(a Alert) {
 		if w.drops != nil {
 			w.drops()
 		}
-		log.Printf("[alert] sink %s queue full, dropping alert (pid=%d rule=%s)", w.sink.Name(), a.Pid, a.RuleName)
+		slog.Warn("sink queue full, dropping alert", "component", "alert", "sink", w.sink.Name(), "pid", a.Pid, "rule", a.RuleName)
 	}
 }
 
@@ -188,7 +188,7 @@ func (d *Dispatcher) Close() {
 	for _, w := range workers {
 		if c, ok := w.sink.(io.Closer); ok {
 			if err := c.Close(); err != nil {
-				log.Printf("[alert] sink %s close error: %v", w.sink.Name(), err)
+				slog.Error("failed closing alert sink", "component", "alert", "sink", w.sink.Name(), "error", err)
 			}
 		}
 	}

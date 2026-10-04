@@ -1,71 +1,28 @@
 package ebpf
 
+import "k-guard/internal/types"
+
 // EventType mirrors the EVT defines in bpf/kguard.c, so better Keep it in sync
-type EventType uint32
+type EventType = types.EventType
 
 const (
-	EventExec             EventType = 1  // process executed (observed after the fact, tracepoint)
-	EventExecBlocked      EventType = 2  // exec blocked pre-flight by the LSM hook
-	EventConnect          EventType = 3  // outbound connect()
-	EventOpenSensitive    EventType = 4  // openat(),openat2() on a sensitive path
-	EventPtrace           EventType = 5  // ptrace() attach/injection attempt
-	EventSetuid           EventType = 6  // setuid()/privilege change
-	EventModuleLoad       EventType = 7  // init_module()/finit_module()
-	EventMemfd            EventType = 8  // memfd_create(), fileless-exec precursor
-	EventSensitiveWrite   EventType = 9  // open() with write on a protected  path
-	EventWriteBlocked     EventType = 10 // for blocked write events
-	EventPtraceBlocked    EventType = 11 // for blocked ptrace events
-	EventKmodBlocked      EventType = 12 // for blocked kmod events
-	EventIoUring          EventType = 13 // iouring events
-	EventLpeBlocked       EventType = 14
-	EventBranchMispredict EventType = 15
-	EventSendto           EventType = 16
-	EventNsChange         EventType = 17
-	EventDnsAnswer        EventType = 18
-	EventReverseShell     EventType = 19
+	EventExec             = types.EventExec
+	EventExecBlocked      = types.EventExecBlocked
+	EventConnect          = types.EventConnect
+	EventOpenSensitive    = types.EventOpenSensitive
+	EventPtrace           = types.EventPtrace
+	EventSetuid           = types.EventSetuid
+	EventModuleLoad       = types.EventModuleLoad
+	EventMemfd            = types.EventMemfd
+	EventSensitiveWrite   = types.EventSensitiveWrite
+	EventWriteBlocked     = types.EventWriteBlocked
+	EventPtraceBlocked    = types.EventPtraceBlocked
+	EventKmodBlocked      = types.EventKmodBlocked
+	EventIoUring          = types.EventIoUring
+	EventLpeBlocked       = types.EventLpeBlocked
+	EventBranchMispredict = types.EventBranchMispredict
+	EventSendto           = types.EventSendto
+	EventNsChange         = types.EventNsChange
+	EventDnsAnswer        = types.EventDnsAnswer
+	EventReverseShell     = types.EventReverseShell
 )
-
-func (t EventType) String() string {
-	switch t {
-	case EventExec:
-		return "EXEC"
-	case EventExecBlocked:
-		return "EXEC_BLOCKED"
-	case EventConnect:
-		return "CONNECT"
-	case EventOpenSensitive:
-		return "OPEN_SENSITIVE"
-	case EventPtrace:
-		return "PTRACE"
-	case EventSetuid:
-		return "SETUID"
-	case EventModuleLoad:
-		return "MODULE_LOAD"
-	case EventMemfd:
-		return "MEMFD_CREATE"
-	case EventSensitiveWrite:
-		return "SENSITIVE_WRITE"
-	case EventWriteBlocked:
-		return "WRITE_BLOCKED"
-	case EventPtraceBlocked:
-		return "PTRACE_BLOCKED"
-	case EventKmodBlocked:
-		return "KMOD_BLOCKED"
-	case EventIoUring:
-		return "IO_URING"
-	case EventLpeBlocked:
-		return "LPE_BLOCKED"
-	case EventBranchMispredict:
-		return "BRANCH_MISPREDICT"
-	case EventSendto:
-		return "SENDTO"
-	case EventNsChange:
-		return "NS_CHANGE"
-	case EventDnsAnswer:
-		return "DNS_ANSWER"
-	case EventReverseShell:
-		return "REVERSE_SHELL"
-	default:
-		return "UNKNOWN"
-	}
-}

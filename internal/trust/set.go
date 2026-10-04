@@ -1,7 +1,9 @@
 package trust
 
 import (
-	"log"
+	"fmt"
+	"k-guard/internal/types"
+	"log/slog"
 	"os"
 	"sync"
 	"syscall"
@@ -9,10 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type FileID struct {
-	Dev uint64
-	Ino uint64
-}
+type FileID = types.FileID
 
 type pinnedFile struct {
 	f  *os.File
@@ -23,10 +22,14 @@ type pinnedFile struct {
 type Set struct {
 	mu     sync.RWMutex
 	pinned map[string]*pinnedFile
+	ids    map[FileID]int
 }
 
 func NewSet() *Set {
-	return &Set{pinned: make(map[string]*pinnedFile)}
+	return &Set{
+		pinned: make(map[string]*pinnedFile),
+		ids:    make(map[FileID]int),
+	}
 }
 
 func IDFromStat(st *syscall.Stat_t) FileID {
@@ -51,54 +54,110 @@ func (s *Set) Sync(paths []string, label string) []FileID {
 	defer s.mu.Unlock()
 
 	want := make(map[string]bool, len(paths))
+	s.ids = make(map[FileID]int)
+
 	for _, p := range paths {
 		if p == "" {
 			continue
 		}
 		want[p] = true
-		if _, ok := s.pinned[p]; ok {
-			continue
+
+		if pf, ok := s.pinned[p]; ok {
+			currentID, err := statPath(p)
+			if err == nil && currentID == pf.id {
+				s.ids[pf.id]++
+				continue
+			}
+			slog.Warn("detected inode change on protected binary, re-verifying",
+				"component", "trust",
+				"label", label,
+				"path", p,
+				"old_ino", pf.id.Ino,
+				"new_ino", currentID.Ino,
+			)
+			_ = pf.f.Close()
+			delete(s.pinned, p)
 		}
-		f, err := os.Open(p)
+
+		f, err := OpenFileSafely(p)
 		if err != nil {
-			log.Printf("[trust] %s: cannot open %q, skipping: %v", label, p, err)
+			slog.Warn("cannot open path for pinning", "component", "trust", "label", label, "path", p, "error", err)
 			continue
 		}
+
+		if err := verifyBinaryIntegrity(f); err != nil {
+			_ = f.Close()
+			slog.Error("SECURITY WARNING: refusing to trust binary", "component", "trust", "label", label, "path", p, "error", err)
+			continue
+		}
+
 		id, err := statFD(f)
 		if err != nil {
 			_ = f.Close()
-			log.Printf("[trust] %s: fstat %q failed, skipping: %v", label, p, err)
+			slog.Warn("fstat failed", "component", "trust", "label", label, "path", p, "error", err)
 			continue
 		}
+
 		s.pinned[p] = &pinnedFile{f: f, id: id}
+		s.ids[id]++
 	}
 
 	for p, pf := range s.pinned {
 		if !want[p] {
-			if err := pf.f.Close(); err != nil {
-				log.Printf("trust: failed closing file: %v", err)
-			}
+			_ = pf.f.Close()
 			delete(s.pinned, p)
 		}
 	}
 
-	ids := make([]FileID, 0, len(s.pinned))
-	for _, pf := range s.pinned {
-		ids = append(ids, pf.id)
+	ids := make([]FileID, 0, len(s.ids))
+	for id := range s.ids {
+		ids = append(ids, id)
 	}
 	return ids
+}
+
+func verifyBinaryIntegrity(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file")
+	}
+	if fi.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("refusing to trust writable binary (mode %04o)", fi.Mode().Perm())
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if os.Geteuid() == 0 && st.Uid != 0 {
+			return fmt.Errorf("refusing to trust binary owned by non-root uid %d", st.Uid)
+		}
+	}
+	return nil
+}
+
+func statPath(path string) (FileID, error) {
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		return FileID{}, err
+	}
+	return IDFromStat(&st), nil
+}
+
+func OpenFileSafely(path string) (*os.File, error) {
+	// O_PATH gets a handle strictly for stat/inode checks without reading contents
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
 }
 
 // Contains reports whether id matches one of the pinned ids
 func (s *Set) Contains(id FileID) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, pf := range s.pinned {
-		if pf.id == id {
-			return true
-		}
-	}
-	return false
+	_, exists := s.ids[id]
+	return exists
 }
 
 func (s *Set) Close() {
@@ -106,7 +165,7 @@ func (s *Set) Close() {
 	defer s.mu.Unlock()
 	for _, pf := range s.pinned {
 		if err := pf.f.Close(); err != nil {
-			log.Printf("trust: error closing file: %v", err)
+			slog.Error("error closing pinned file", "component", "trust", "error", err)
 		}
 	}
 }

@@ -2,8 +2,8 @@ package audit
 
 import (
 	"bufio"
-	"k-guard/internal/config"
-	"log"
+	"k-guard/internal/types"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,7 +23,7 @@ type Record struct {
 	Decision  Decision
 	EventType string
 	RuleName  string
-	Mitre     *config.MitreMeta
+	Mitre     *types.MitreMeta
 	PID       uint32
 	PPID      uint32
 	UID       uint32
@@ -83,7 +83,7 @@ func (l *Logger) worker() {
 	w := bufio.NewWriterSize(l.file, 64*1024)
 	defer func() {
 		if err := w.Flush(); err != nil {
-			log.Printf("audit: failed to flush writer: %v", err)
+			slog.Error("failed to flush audit log writer", "component", "audit", "error", err)
 		}
 	}()
 
@@ -137,7 +137,7 @@ func (l *Logger) worker() {
 		buf = append(buf, "}\n"...)
 
 		if _, err := w.Write(buf); err != nil {
-			log.Printf("audit: write failed: %v", err)
+			slog.Error("audit log write failed", "component", "audit", "error", err)
 			return
 		}
 	}

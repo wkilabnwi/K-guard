@@ -2,7 +2,7 @@ package processor
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +14,7 @@ import (
 	"k-guard/internal/ebpf"
 	k8s "k-guard/internal/k8s"
 	"k-guard/internal/metrics"
+	"k-guard/internal/pb"
 	"k-guard/internal/safety"
 )
 
@@ -60,40 +61,40 @@ func (e *Engine) applyConfig(c *config.Config) {
 	}
 
 	if err := e.ebpfMgr.SyncPrefixBlocks(c.BlockedPrefix()); err != nil {
-		log.Printf("[engine] failed to sync LPM prefix block-list: %v", err)
+		slog.Error("failed to sync LPM prefix block-list", "component", "engine", "error", err)
 	}
 	if err := e.ebpfMgr.SyncBlockedPaths(c.BlockedPatterns()); err != nil {
-		log.Printf("[engine] failed to sync LSM block-list: %v", err)
+		slog.Error("failed to sync LSM block-list", "component", "engine", "error", err)
 	}
 	if err := e.ebpfMgr.SyncSuspiciousPaths(c.SuspiciousPaths); err != nil {
-		log.Printf("[engine] failed to sync Suspicious Paths: %v", err)
+		slog.Error("failed to sync Suspicious Paths", "component", "engine", "error", err)
 	}
 	if err := e.ebpfMgr.SyncSensitiveWritePaths(c.SensitiveWritePaths); err != nil {
-		log.Printf("[engine] failed to sync Suspicious write Paths: %v", err)
+		slog.Error("failed to sync Sensitive write Paths", "component", "engine", "error", err)
 	}
 	if err := e.ebpfMgr.SyncBlockedWritePaths(c.BlockedWritePaths); err != nil {
-		log.Printf("[engine] failed to sync Blocked write Paths: %v", err)
+		slog.Error("failed to sync Blocked write Paths", "component", "engine", "error", err)
 	}
 	if err := e.ebpfMgr.SyncAllowedPtraceAttached(c.AllowedPtraceAttached); err != nil {
-		log.Printf("[engine] faile to sync Allowed Ptrace Attaches: %v", err)
+		slog.Error("failed to sync Allowed Ptrace Attaches", "component", "engine", "error", err)
 	}
 
 	wantPtraceEnforcement := c.PtraceEnforcementEnabled
 	if err := e.ebpfMgr.SetPtraceEnforcement(wantPtraceEnforcement); err != nil {
-		log.Printf("[engine] failed to set Ptrace enforcement kill-switch: %v", err)
+		slog.Error("failed to set Ptrace enforcement kill-switch", "component", "engine", "error", err)
 	}
 
 	wantKmodEnforcement := c.KmodEnforcementEnabled
 	if err := e.ebpfMgr.SetKmodEnforcement(wantKmodEnforcement); err != nil {
-		log.Printf("[engine] failed to set kmod enforcement kill-switch: %v", err)
+		slog.Error("failed to set kmod enforcement kill-switch", "component", "engine", "error", err)
 	}
 
 	wantEnforcement := c.EnforcementEnabled && e.ebpfMgr.LSMEnabled
 	if c.EnforcementEnabled && !e.ebpfMgr.LSMEnabled {
-		log.Printf("[engine] config requests enforcement_enabled=true, but the LSM hook is not active on this kernel/build, staying in detect-only mode. See bpf/include/README.md.")
+		slog.Warn("enforcement_enabled=true requested, but LSM hook is inactive on this kernel; staying in detect-only mode", "component", "engine")
 	}
 	if err := e.ebpfMgr.SetEnforcement(wantEnforcement); err != nil {
-		log.Printf("[engine] failed to set enforcement kill-switch: %v", err)
+		slog.Error("failed to set enforcement kill-switch", "component", "engine", "error", err)
 	}
 }
 
@@ -107,47 +108,17 @@ func isSuspiciousPath(target string, filenames []string) bool {
 }
 
 // evaluateCEL executes the pre-compiled AST for a rule against event context
-func evaluateCEL(r config.Rule, celCtx config.EventContext) bool {
+func evaluateCEL(r config.Rule, pbEvt *pb.EventContext) bool {
 	if r.Program == nil {
 		return false
 	}
 
-	input := map[string]interface{}{
-		"event": map[string]interface{}{
-			"type":                celCtx.Type,
-			"ancestor_suspicious": celCtx.AncestorSuspicious,
-			"ancestor_filename":   celCtx.AncestorFilename,
-			"is_suspicious_path":  celCtx.IsSuspiciousPath,
-			"process": map[string]interface{}{
-				"path":        celCtx.Process.Path,
-				"basename":    celCtx.Process.Basename,
-				"sha256":      celCtx.Process.SHA256,
-				"pid":         celCtx.Process.PID,
-				"ppid":        celCtx.Process.PPID,
-				"uid":         celCtx.Process.UID,
-				"gid":         celCtx.Process.GID,
-				"comm":        celCtx.Process.Comm,
-				"args":        celCtx.Process.Args,
-				"is_fileless": celCtx.Process.IsFileless,
-			},
-		},
-		"process": map[string]interface{}{
-			"path":        celCtx.Process.Path,
-			"basename":    celCtx.Process.Basename,
-			"sha256":      celCtx.Process.SHA256,
-			"pid":         celCtx.Process.PID,
-			"ppid":        celCtx.Process.PPID,
-			"uid":         celCtx.Process.UID,
-			"gid":         celCtx.Process.GID,
-			"comm":        celCtx.Process.Comm,
-			"args":        celCtx.Process.Args,
-			"is_fileless": celCtx.Process.IsFileless,
-		},
-	}
-
-	out, _, err := r.Program.Eval(input)
+	out, _, err := r.Program.Eval(map[string]any{
+		"event":   pbEvt,
+		"process": pbEvt.GetProcess(),
+	})
 	if err != nil {
-		log.Printf("[engine] CEL evaluation error in rule %q: %v", r.Name, err)
+		slog.Error("CEL evaluation error in rule", "component", "engine", "rule", r.Name, "error", err)
 		return false
 	}
 
@@ -186,25 +157,29 @@ func (e *Engine) AnalyzeExec(meta ProcessMeta, blocked bool) {
 		return
 	}
 
-	h := &execHash{pid: meta.PID}
-	shaVal, err := h.get()
-	if err != nil {
-		e.metrics.IncHashCheckError()
+	var shaVal string
+	if cfg.RequiresSHA256() {
+		h := &execHash{pid: meta.PID}
+		var err error
+		shaVal, err = h.get()
+		if err != nil {
+			e.metrics.IncHashCheckError()
+		}
 	}
 
-	celCtx := config.EventContext{
+	pbCtx := &pb.EventContext{
 		Type:               "EXEC",
 		AncestorSuspicious: meta.AncestorSuspicious,
 		AncestorFilename:   meta.AncestorFilename,
 		IsSuspiciousPath:   isSuspiciousPath(meta.Filename, cfg.SuspiciousPaths),
-		Process: config.ProcessContext{
+		Process: &pb.ProcessContext{
 			Path:       meta.Filename,
 			Basename:   filepath.Base(meta.Filename),
-			SHA256:     shaVal,
-			PID:        int64(meta.PID),
-			PPID:       int64(meta.PPID),
-			UID:        int64(meta.UID),
-			GID:        int64(meta.GID),
+			Sha256:     shaVal,
+			Pid:        int64(meta.PID),
+			Ppid:       int64(meta.PPID),
+			Uid:        int64(meta.UID),
+			Gid:        int64(meta.GID),
 			Comm:       meta.Comm,
 			Args:       strings.Fields(meta.Args),
 			IsFileless: meta.IsFileless,
@@ -212,7 +187,7 @@ func (e *Engine) AnalyzeExec(meta ProcessMeta, blocked bool) {
 	}
 
 	for _, r := range cfg.Rules {
-		if !evaluateCEL(r, celCtx) {
+		if !evaluateCEL(r, pbCtx) {
 			continue
 		}
 
@@ -251,18 +226,18 @@ func (e *Engine) handleExecBlocked(cfg *config.Config, meta ProcessMeta) {
 	var mitre *config.MitreMeta
 	var ruleMode = config.RuleModeEnforce
 
-	celCtx := config.EventContext{
+	celCtx := &pb.EventContext{
 		Type:               "EXEC_BLOCKED",
 		AncestorSuspicious: meta.AncestorSuspicious,
 		AncestorFilename:   meta.AncestorFilename,
 		IsSuspiciousPath:   isSuspiciousPath(meta.Filename, cfg.SuspiciousPaths),
-		Process: config.ProcessContext{
+		Process: &pb.ProcessContext{
 			Path:       meta.Filename,
 			Basename:   filepath.Base(meta.Filename),
-			PID:        int64(meta.PID),
-			PPID:       int64(meta.PPID),
-			UID:        int64(meta.UID),
-			GID:        int64(meta.GID),
+			Pid:        int64(meta.PID),
+			Ppid:       int64(meta.PPID),
+			Uid:        int64(meta.UID),
+			Gid:        int64(meta.GID),
 			Comm:       meta.Comm,
 			Args:       strings.Fields(meta.Args),
 			IsFileless: meta.IsFileless,

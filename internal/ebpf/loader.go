@@ -3,7 +3,8 @@ package ebpf
 import (
 	"fmt"
 	"k-guard/internal/trust"
-	"log"
+	"k-guard/internal/types"
+	"log/slog"
 	"net"
 	"os"
 	"reflect"
@@ -40,10 +41,7 @@ type LpmKey256 struct {
 	Data          [256]byte
 }
 
-type FileID struct {
-	Dev uint64
-	Ino uint64
-}
+type FileID = types.FileID
 
 func NewManager() (*Manager, error) {
 	// Removing the memory limit, standard practice
@@ -81,15 +79,18 @@ func NewManager() (*Manager, error) {
 
 	for _, tp := range tracepoints {
 		if tp.prog == nil {
-			log.Printf("[ebpf] program %q not present in compiled object, skipping sensor", tp.name)
+			slog.Warn("program not present in compiled object, skipping sensor", "component", "ebpf", "program", tp.name)
 			continue
 		}
 
-		// Attaching each of the TPs to it's eBPF program
 		l, aerr := link.Tracepoint(tp.category, tp.event, tp.prog, nil)
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: failed to attach %s/%s (kernel/permissions may not support it): %v",
-				tp.category, tp.event, aerr)
+			slog.Warn("failed to attach tracepoint sensor (kernel/permissions may not support it)",
+				"component", "ebpf",
+				"category", tp.category,
+				"event", tp.event,
+				"error", aerr,
+			)
 			continue
 		}
 		m.links = append(m.links, l)
@@ -104,110 +105,110 @@ func NewManager() (*Manager, error) {
 	if m.Objects.LsmBprmCheck != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmBprmCheck})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM enforcement hook is present in the object but failed to attach: %v", aerr)
-			log.Printf("[ebpf] Common causes: kernel missing CONFIG_BPF_LSM, 'bpf' not in /sys/kernel/security/lsm ")
-			log.Printf("check: cat /sys/kernel/security/lsm), or insufficient capabilities. Falling back to detect-only mode.")
+			slog.Warn("LSM enforcement hook failed to attach; falling back to detect-only mode",
+				"component", "ebpf",
+				"error", aerr,
+			)
 		} else {
 			m.links = append(m.links, l)
 			m.LSMEnabled = true
-			log.Println("[ebpf] LSM enforcement hook attached, pre-exec blocking is ACTIVE.")
+			slog.Info("LSM enforcement hook attached, pre-exec blocking is ACTIVE", "component", "ebpf")
 			// We start by setting Enforcment to false so that it doesn't start working before we need it to
 			// it's also to avoid it possbily terminating any program unexpectidely, just a security measure
 			if serr := m.SetEnforcement(false); serr != nil {
-				log.Printf("[ebpf] WARNING: could not initialize enforcement kill-switch: %v", serr)
+				slog.Warn("could not initialize enforcement kill-switch", "component", "ebpf", "error", serr)
 			}
 		}
 	} else {
-		log.Println("[ebpf] LSM enforcement program not present in the compiled object (built without vmlinux.h) running in DETECT-ONLY mode. See bpf/include/README.md to enable real pre-exec blocking.")
+		slog.Warn("LSM enforcement program not present in compiled object; running in DETECT-ONLY mode", "component", "ebpf")
 
 	}
 
 	if m.Objects.KguardTaskAlloc != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardTaskAlloc})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM task_alloc hook failed to attach: %v", aerr)
+			slog.Warn("LSM task_alloc hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM task_alloc hook attached, lineage tracking is ACTIVE.")
+			slog.Info("LSM task_alloc hook attached, lineage tracking is ACTIVE", "component", "ebpf")
 		}
 	} else {
-		log.Println("[ebpf] WARNING: KguardTaskAlloc object is nil in compiled BPF objects!")
+		slog.Warn("KguardTaskAlloc object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if m.Objects.LsmFileOpen != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmFileOpen})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM file open/write enforcement hook failed to attach: %v", aerr)
+			slog.Warn("LSM file open/write enforcement hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM file-write enforcement hook attached, write blocking is ACTIVE.")
+			slog.Info("LSM file-write enforcement hook attached, write blocking is ACTIVE", "component", "ebpf")
 		}
 	} else {
-		log.Println("[ebpf] WARNING: LsmFileOpen object is nil in compiled BPF objects!")
+		slog.Warn("LsmFileOpen object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if m.Objects.LsmPtraceAccessCheck != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmPtraceAccessCheck})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM Ptrace Access check enforcement hook failed to attach: %v", aerr)
+			slog.Warn("LSM Ptrace Access check enforcement hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM Ptrace Access enforcement hook attached, write blocking is ACTIVE.")
+			slog.Info("LSM Ptrace Access enforcement hook attached, ptrace blocking is ACTIVE", "component", "ebpf")
 		}
 	} else {
-		log.Println("[ebpf] WARNING: LsmFileOpen object is nil in compiled BPF objects!")
+		slog.Warn("LsmPtraceAccessCheck object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if m.Objects.KguardKernelReadFile != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardKernelReadFile})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM kernel_read_file enforcement hook failed to attach: %v", aerr)
+			slog.Warn("LSM kernel_read_file enforcement hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM kernel_read_file enforcement hook attached, module read blocking is ACTIVE.")
+			slog.Info("LSM kernel_read_file enforcement hook attached, module read blocking is ACTIVE", "component", "ebpf")
 		}
 	} else {
-		log.Println("[ebpf] WARNING: KguardKernelReadFile object is nil in compiled BPF objects!")
+		slog.Warn("KguardKernelReadFile object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if m.Objects.KguardKernelLoadData != nil {
-		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardKernelLoadData}) // Note: link.AttachLSM uses link.LSMOptions
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardKernelLoadData})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM kernel_load_data enforcement hook failed to attach: %v", aerr)
+			slog.Warn("LSM kernel_load_data enforcement hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM kernel_load_data enforcement hook attached, module load blocking is ACTIVE.")
+			slog.Info("LSM kernel_load_data enforcement hook attached, module load blocking is ACTIVE", "component", "ebpf")
 		}
 	} else {
-		log.Println("[ebpf] WARNING: KguardKernelLoadData object is nil in compiled BPF objects!")
+		slog.Warn("KguardKernelLoadData object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if m.Objects.LsmTaskKill != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmTaskKill})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM task_kill hook failed to attach: %v", aerr)
+			slog.Warn("LSM task_kill hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM task_kill self-defense hook attached.")
+			slog.Info("LSM task_kill self-defense hook attached", "component", "ebpf")
 		}
 	}
 
 	if m.Objects.LsmBpfCmd != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmBpfCmd})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM bpf_cmd hook failed to attach: %v", aerr)
+			slog.Warn("LSM bpf_cmd hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM bpf_cmd self-defense hook attached.")
+			slog.Info("LSM bpf_cmd self-defense hook attached", "component", "ebpf")
 		}
 	}
 
 	m.attachTCDNS()
 
 	if m.Objects.OnBranchMispredict != nil && !hasHardwarePMU() {
-		log.Println("[ebpf] PMU branch-mispredict sensor skipped: no hardware PMU device present no /sys/bus/event_source/devices/cpu*), common under virtualization/colima/cloud VMs that don't expose a vPMU to the guest kernel. Detect-only for this sensor.")
+		slog.Info("PMU branch-mispredict sensor skipped: no hardware PMU device present (detect-only mode)", "component", "ebpf")
 	} else if m.Objects.OnBranchMispredict != nil {
-		// Configure perf event attribute for Branch Mispredictions
 		attr := &unix.PerfEventAttr{
 			Type:   unix.PERF_TYPE_HARDWARE,
 			Config: unix.PERF_COUNT_HW_BRANCH_MISSES,
@@ -217,7 +218,7 @@ func NewManager() (*Manager, error) {
 
 		numCPU, cerr := ebpf.PossibleCPU()
 		if cerr != nil {
-			log.Printf("[ebpf] WARNING: could not determine possible CPU count (%v), falling back to runtime.NumCPU(), some CPUs may go unmonitored", cerr)
+			slog.Warn("could not determine possible CPU count, falling back to runtime.NumCPU()", "component", "ebpf", "error", cerr)
 			numCPU = runtime.NumCPU()
 		}
 
@@ -225,18 +226,17 @@ func NewManager() (*Manager, error) {
 		for cpu := 0; cpu < numCPU; cpu++ {
 			fd, err := unix.PerfEventOpen(attr, -1, cpu, -1, 0)
 			if err != nil {
-
-				log.Printf("[ebpf] WARNING: failed to open perf event on CPU %d: %v", cpu, err)
+				slog.Warn("failed to open perf event on CPU", "component", "ebpf", "cpu", cpu, "error", err)
 				continue
 			}
 
 			if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_SET_BPF, m.Objects.OnBranchMispredict.FD()); err != nil {
-				log.Printf("[ebpf] WARNING: failed to bind PMU sensor program on CPU %d: %v", cpu, err)
+				slog.Warn("failed to bind PMU sensor program on CPU", "component", "ebpf", "cpu", cpu, "error", err)
 				_ = unix.Close(fd)
 				continue
 			}
 			if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_ENABLE, 0); err != nil {
-				log.Printf("[ebpf] WARNING: failed to enable PMU sensor on CPU %d: %v", cpu, err)
+				slog.Warn("failed to enable PMU sensor on CPU", "component", "ebpf", "cpu", cpu, "error", err)
 				_ = unix.Close(fd)
 				continue
 			}
@@ -247,9 +247,9 @@ func NewManager() (*Manager, error) {
 
 		if attached > 0 {
 			m.activeSensors = append(m.activeSensors, "pmu_branch_mispredict")
-			log.Printf("[ebpf] PMU branch-mispredict sensor attached on %d/%d CPUs", attached, numCPU)
+			slog.Info("PMU branch-mispredict sensor attached", "component", "ebpf", "attached_cpus", attached, "possible_cpus", numCPU)
 		} else {
-			log.Printf("[ebpf] WARNING: PMU branch-mispredict sensor failed to attach on any CPU, sensor disabled")
+			slog.Warn("PMU branch-mispredict sensor failed to attach on any CPU, sensor disabled", "component", "ebpf")
 		}
 	}
 
@@ -257,13 +257,13 @@ func NewManager() (*Manager, error) {
 	if m.Objects.KguardTaskFixSetuid != nil {
 		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardTaskFixSetuid})
 		if aerr != nil {
-			log.Printf("[ebpf] WARNING: LSM task_fix_setuid hook failed to attach: %v", aerr)
+			slog.Warn("LSM task_fix_setuid hook failed to attach", "component", "ebpf", "error", aerr)
 		} else {
 			m.links = append(m.links, l)
-			log.Println("[ebpf] LSM task_fix_setuid hook attached, local privilege escalation blocking is ACTIVE.")
+			slog.Info("LSM task_fix_setuid hook attached, local privilege escalation blocking is ACTIVE", "component", "ebpf")
 		}
 	} else {
-		log.Println("[ebpf] WARNING: KguardTaskFixSetuid object is nil in compiled BPF objects!")
+		slog.Warn("KguardTaskFixSetuid object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if err := m.Objects.SelfPid.Set(uint32(os.Getpid())); err != nil {
@@ -271,11 +271,11 @@ func NewManager() (*Manager, error) {
 	}
 
 	if err := m.RegisterProtectedIDs(); err != nil {
-		log.Printf("[ebpf] WARNING: failed to populate protected IDs map: %v", err)
+		slog.Warn("failed to populate protected IDs map", "component", "ebpf", "error", err)
 	}
 
 	if !m.LSMEnabled {
-		log.Println("[ebpf] NOTE: without the LSM hook, K-Guard can only react after a binary has already started executing, not prevent the exec outright.")
+		slog.Info("without LSM hook, running in detect-only mode (post-exec reactions only)", "component", "ebpf")
 	}
 
 	if m.Objects.Rb == nil {
@@ -289,7 +289,7 @@ func NewManager() (*Manager, error) {
 	}
 	m.Reader = rd
 
-	log.Printf("[ebpf] active sensors: %v (LSM enforcement: %v)", m.activeSensors, m.LSMEnabled)
+	slog.Info("eBPF manager initialized successfully", "component", "ebpf", "active_sensors", m.activeSensors, "lsm_enabled", m.LSMEnabled)
 
 	return m, nil
 }
@@ -574,7 +574,7 @@ func (m *Manager) RegisterProtectedIDs() error {
 		}
 	}
 
-	log.Println("[ebpf] eBPF object self-defense map dynamically populated.")
+	slog.Info("eBPF object self-defense map dynamically populated", "component", "ebpf")
 	return nil
 }
 
@@ -600,7 +600,7 @@ func (m *Manager) attachTCDNS() {
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		log.Printf("[ebpf] WARNING: failed to list network interfaces for TC attach: %v", err)
+		slog.Warn("failed to list network interfaces for TC attach", "component", "ebpf", "error", err)
 		return
 	}
 
@@ -642,7 +642,7 @@ func (m *Manager) attachTCDNS() {
 		if err := netlink.FilterReplace(egressFilter); err == nil {
 			attachedCount++
 		} else {
-			log.Printf("[ebpf] WARNING: failed to attach TC egress filter on %s: %v", iface.Name, err)
+			slog.Warn("failed to attach TC egress filter", "component", "ebpf", "interface", iface.Name, "error", err)
 		}
 
 		ingressFilter := &netlink.BpfFilter{
@@ -660,12 +660,12 @@ func (m *Manager) attachTCDNS() {
 		if err := netlink.FilterReplace(ingressFilter); err == nil {
 			attachedCount++
 		} else {
-			log.Printf("[ebpf] WARNING: failed to attach TC ingress filter on %s: %v", iface.Name, err)
+			slog.Warn("failed to attach TC ingress filter", "component", "ebpf", "interface", iface.Name, "error", err)
 		}
 	}
 
 	if attachedCount > 0 {
 		m.activeSensors = append(m.activeSensors, "tc_dns_classifier")
-		log.Printf("[ebpf] TC DNS classifier attached on active network interfaces (%d filters active)", attachedCount)
+		slog.Info("TC DNS classifier attached", "component", "ebpf", "active_filters", attachedCount)
 	}
 }

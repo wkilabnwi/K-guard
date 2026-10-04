@@ -24,7 +24,7 @@ func TestEventType_String(t *testing.T) {
 		{EventPtraceBlocked, "PTRACE_BLOCKED"},
 		{EventKmodBlocked, "KMOD_BLOCKED"},
 		{EventIoUring, "IO_URING"},
-		{EventType(999), "UNKNOWN"},
+		{EventType(999), "UNKNOWN(999)"},
 	}
 
 	for _, tt := range tests {

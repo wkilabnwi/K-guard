@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,7 +51,7 @@ func (s *Store) rotateIfNeeded() error {
 	}
 	if s.f != nil {
 		if err := s.f.Close(); err != nil {
-			log.Printf("alert: failed closing alert store file: %v", err)
+			slog.Error("failed closing alert store file", "component", "store", "error", err)
 		}
 	}
 	f, err := os.OpenFile(s.pathFor(today), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
@@ -66,17 +66,17 @@ func (s *Store) Send(a Alert) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.rotateIfNeeded(); err != nil {
-		log.Printf("[store] rotate error: %v", err)
+		slog.Error("store file rotation failed", "component", "store", "error", err)
 		return
 	}
 	line, err := json.Marshal(a)
 	if err != nil {
-		log.Printf("[store] marshal error: %v", err)
+		slog.Error("failed marshaling alert to json", "component", "store", "error", err)
 		return
 	}
 	line = append(line, '\n')
 	if _, err := s.f.Write(line); err != nil {
-		log.Printf("[store] write error: %v", err)
+		slog.Error("failed writing alert to store", "component", "store", "error", err)
 	}
 }
 

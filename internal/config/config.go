@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	pb "k-guard/internal/pb"
 
 	"cel.dev/cel-go/cel"
 	"go.yaml.in/yaml/v3"
@@ -45,19 +47,13 @@ var (
 	celOnce sync.Once
 )
 
-type MitreMeta struct {
-	Tactic      string   `json:"tactic,omitempty" yaml:"tactic,omitempty"`
-	TechniqueID string   `json:"technique_id,omitempty" yaml:"technique_id,omitempty"`
-	Technique   string   `json:"technique,omitempty" yaml:"technique,omitempty"`
-	Tags        []string `json:"tags,omitempty" yaml:"tags,omitempty"`
-}
-
 // GetCELEnvironment returns the singleton CEL environment instance
 func GetCELEnvironment() (*cel.Env, error) {
 	celOnce.Do(func() {
 		celEnv, celErr = cel.NewEnv(
-			cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
-			cel.Variable("process", cel.MapType(cel.StringType, cel.DynType)),
+			cel.Types(&pb.EventContext{}, &pb.ProcessContext{}),
+			cel.Variable("event", cel.ObjectType("kguard.EventContext")),
+			cel.Variable("process", cel.ObjectType("kguard.ProcessContext")),
 		)
 	})
 	return celEnv, celErr
@@ -211,12 +207,12 @@ func (m *Manager) ReloadNow() error {
 
 	if old != nil {
 		if changes := diffConfig(old, c); len(changes) > 0 {
-			log.Printf("[config] reload applied %d change(s):", len(changes))
+			slog.Info("config reload applied policy changes", "component", "config", "count", len(changes))
 			for _, ch := range changes {
-				log.Printf("[config] : %s", ch)
+				slog.Info("policy diff", "component", "config", "change", ch)
 			}
 		} else {
-			log.Printf("[config] reload: file changed but no effective policy differences detected")
+			slog.Info("config file changed but no effective policy differences detected", "component", "config")
 		}
 	}
 
@@ -229,8 +225,19 @@ func (m *Manager) notify(c *Config) {
 	subs := make([]func(*Config), len(m.subscribers))
 	copy(subs, m.subscribers)
 	m.mu.Unlock()
-	for _, fn := range subs {
-		fn(c)
+	for i, fn := range subs {
+		func(index int, subscriber func(*Config)) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("CRITICAL: config subscriber panicked during reload notification",
+						"component", "config",
+						"subscriber_index", index,
+						"panic", r,
+					)
+				}
+			}()
+			subscriber(c)
+		}(i, fn)
 	}
 }
 
@@ -248,7 +255,7 @@ func (m *Manager) WatchPoll(interval time.Duration, stop <-chan struct{}) {
 			case <-ticker.C:
 				fi, err := os.Stat(m.path)
 				if err != nil {
-					log.Printf("[config] stat %s: %v", m.path, err)
+					slog.Warn("config stat failed", "component", "config", "path", m.path, "error", err)
 					continue
 				}
 
@@ -257,11 +264,11 @@ func (m *Manager) WatchPoll(interval time.Duration, stop <-chan struct{}) {
 				m.mu.Unlock()
 
 				if changed {
-					log.Printf("[config] change detected in %s, reloading", m.path)
+					slog.Info("config file change detected, reloading", "component", "config", "path", m.path)
 					if err := m.ReloadNow(); err != nil {
-						log.Printf("[config] reload FAILED, keeping previous config: %v", err)
+						slog.Error("config reload FAILED, keeping previous configuration", "component", "config", "error", err)
 					} else {
-						log.Printf("[config] reload succeeded")
+						slog.Info("config reload succeeded", "component", "config")
 					}
 				}
 			}

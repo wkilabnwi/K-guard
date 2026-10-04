@@ -26,6 +26,7 @@ type Registry struct {
 	killErrorsTotal      int64
 	blocksTotal          int64
 	ringbufDropsTotal    int64
+	decodeErrorsTotal    int64
 	sinkErrorsTotal      map[string]*int64
 	sinkErrorsMu         sync.Mutex
 	hashCheckErrorsTotal int64
@@ -56,6 +57,7 @@ func bump(m map[string]*int64, mu *sync.Mutex, key string) {
 }
 
 func (r *Registry) IncHashCheckError()        { atomic.AddInt64(&r.hashCheckErrorsTotal, 1) }
+func (r *Registry) IncDecodeError()           { atomic.AddInt64(&r.decodeErrorsTotal, 1) }
 func (r *Registry) IncEvent(eventType string) { bump(r.eventsTotal, &r.eventsMu, eventType) }
 func (r *Registry) IncRuleHit(ruleName, severity, action string) {
 	key := RuleHitKey{
