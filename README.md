@@ -3,657 +3,77 @@
 [![K-Guard CI/CD Pipeline](https://github.com/wkilabnwi/K-guard/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/wkilabnwi/K-guard/actions/workflows/ci.yml)
 [![golangci-lint](https://img.shields.io/badge/golangci--lint-0%20issues-brightgreen)](https://golangci-lint.run/)
 
-K-Guard is a lightweight Linux host intrusion detection and pre-execution *prevention* agent built on eBPF. It monitors security-relevant syscalls and kernel events, evaluates them against a hot-reloadable CEL-based rule engine (supporting both **YAML** and **JSON** formats), and fans matching alerts out to multiple sinks (stdout, syslog, webhook, local JSON-Lines storage, and a read-only web dashboard).
-For any question, feel free to contact louai.sahli1@gmail.com.
+K-Guard is a lightweight Linux host intrusion detection and **pre-execution prevention** agent built on eBPF. It watches security-relevant kernel events, evaluates them against a hot-reloadable [CEL](https://github.com/google/cel-spec) rule engine, and either blocks the behavior in-kernel (BPF LSM) or alerts, depending on what your kernel supports.
 
-## DEMO
 
-See `Demo` Folder
+Questions? louai.sahli1@gmail.com
 
-## What it watches
+## Features
 
-K-Guard attaches a mix of tracepoint sensors and, when the kernel allows
-it, a BPF LSM hook:
+- **Prevention, not just detection**: blocks exec, file writes, ptrace, kernel module loads, privilege escalation and reverse shells with `-EPERM` before they happen
+- **CEL rules** in YAML or JSON, with an `audit` (shadow) mode for safe rollout
+- **Sigma import** and **MITRE ATT&CK** tagging
+- **Kubernetes-aware**: alerts enriched with pod, namespace and container
+- **DNS correlation**: connections are tied back to resolved domain names
+- **Self-protecting**: resists kill and detach attempts, and fails open if it exits
+- **Many sinks**: stdout, syslog, webhook, Slack, JSON-Lines store, dashboard, Prometheus
+- **Compliance audit trail** (NDJSON) for every enforcement decision
 
-| Event | Hook | Notes |
-|---|---|---|
-| `EXEC` | `tracepoint/sched/sched_process_exec` (+ `lsm/task_alloc` for lineage tracking) | Observed *after* the exec has already started |
-| `EXEC_BLOCKED` | `lsm/bprm_check_security` | Pre-exec : the kernel is stopped from ever running the binary |
-| `CONNECT` | `sys_enter_connect` | Outbound connections : IPv4, IPv6, and Unix domain sockets |
-| `SENDTO` | `sys_enter_sendto` | Unconnected socket egress (UDP/DNS exfiltration patterns passing explicit destination addresses) |
-| `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
-| `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
-| `BLOCKED_WRITE` | `lsm/file_open` | LSM file hook pre-emptively drops writes (`-EPERM`) on `blocked_write_paths` |
-| `PTRACE` | `sys_enter_ptrace` | Attach/injection attempts |
-| `PTRACE_BLOCKED`|`lsm/ptrace_access_check` | Pre-emptively drops unauthorized ptrace attach/injection attempts (-EPERM) |
-| `SETUID` | `sys_enter_setuid` | Privilege changes |
-| `NS_CHANGE` | `sys_enter_unshare` / `sys_enter_setns` | Namespace mutation attempts (`unshare()` and `setns()`) |
-| `LPE_BLOCKED` | `lsm/task_fix_setuid` | Pre-emptively blocks a UID transition to root unless the process legitimately gained it via a setuid-root binary, tracked in kernel-side lineage |
-| `MODULE_LOAD` | `sys_enter_init_module` | Kernel module loading |
-`KMOD_BLOCKED` | `lsm/kernel_read_file, lsm/kernel_load_data` | Pre-emptively blocks unauthorized module loads inside containers using the `container_cgroups` BPF map |
-| `MEMFD_CREATE` | `sys_enter_memfd_create` | Fileless-exec precursor |
-| `FILELESS_EXEC` | `lsm/bprm_check_security` | Detected structurally in-kernel via zero-link count (`i_nlink == 0`) on `tmpfs` (`memfd`) |
-| `IO_URING` | `tracepoint/io_uring/io_uring_submit_req` | Monitored asynchronous file ops (`IORING_OP_OPENAT`, `OPENAT2`, `CONNECT`) |
-| `TASK_KILL_BLOCKED` | `lsm/task_kill` | Self-protection: pre-emptively blocks external processes from sending termination signals to K-Guard |
-| `BPF_CMD_BLOCKED` | `lsm/bpf` | Self-protection: blocks unauthorized processes from inspecting or detaching K-Guard eBPF maps/programs |
-| `BRANCH_MISPREDICT` | `perf_event` (`PERF_TYPE_HARDWARE`, `PERF_COUNT_HW_BRANCH_MISSES`) | Hardware PMU counter, not a syscall/LSM hook. One `perf_event` per possible CPU, sampled every 10k mispredicted branches.|
-| `REVERSE_SHELL` | `sys_enter_dup2`, `sys_enter_dup3` + `lsm/bprm_check_security` | Pre-exec: detects socket redirectionm and drops execution (`-EPERM`). |
+## Requirements
 
-### Hardware PMU sensor (branch mispredictions)
- 
-Unlike every other sensor in the table above, this one doesn't hook a
-syscall or LSM callback, it opens a `PERF_TYPE_HARDWARE` counter
-(`perf_event_open`) on every possible CPU (`ebpf.PossibleCPU()`, not
-`runtime.NumCPU()`, so a cpuset/static-CPU-manager pod still gets full
-node coverage rather than just the CPUs it happens to be scheduled on)
-and binds the `on_branch_mispredict` program to each one via
-`PERF_EVENT_IOC_SET_BPF` + `PERF_EVENT_IOC_ENABLE`.
- 
-That means it depends on hardware the other sensors don't: a real PMU
-device exposed by the kernel. Many virtualized environments don't pass
-one through to the guest, this includes **hypervisor-backed dev VMs on
-macOS** (colima, whether backed by `vz` or `qemu`/HVF) and **some cloud
-instance types** (AWS Nitro in particular is known to withhold PMU
-access from guests for isolation reasons). On those hosts,
-`perf_event_open` fails with `ENOENT` for every CPU, regardless of
-config.
- 
-K-Guard checks for this up front (`hasHardwarePMU()`, looking for a
-`cpu`/`cpu_core`/`cpu_atom` entry under
-`/sys/bus/event_source/devices`) rather than attempting and failing per
-CPU, and skips the sensor with a single clear log line if none is
-found. You can check any host in advance the same way:
- 
+- Linux **5.11+** with BTF enabled (needed for kernel-side process lineage tracking)
+- Root (or the relevant capabilities)
+- For **prevention**: `CONFIG_BPF_LSM=y` and `bpf` in the active LSM list. Without it, K-Guard runs in detection-only mode.
+
+## Quick start
+
 ```bash
-ls /sys/bus/event_source/devices/
+# Build the eBPF objects and the binary: see BUILD.md
+
+# Validate a config without touching the kernel
+sudo ./k-guard -config rules.yaml -check
+
+# Run
+sudo ./k-guard -config rules.yaml
 ```
- 
-If `cpu` (or `cpu_core`/`cpu_atom` on hybrid Intel) isn't listed, this
-sensor will not attach on that host, and `pmu_branch_mispredict` won't
-appear in the active-sensor list or `/healthz`. Every other sensor is
-unaffected either way. The sysfs-detection logic itself has unit test
-coverage (`internal/ebpf/loader_pmu_test.go`) that doesn't require real
-PMU hardware to run; the attach path itself does, and should be
-verified on real (ideally bare-metal, or a cloud VPS that confirms a
-`cpu` entry) hardware before being relied on for detection coverage in
-a given deployment.
 
-### Two operating modes
-
-- **DETECTION ONLY** : the default, and the only mode available on
-  kernels/builds without `CONFIG_BPF_LSM` support. K-Guard reacts to an
-  exec after the fact: it alerts and, for `KILL`/`BLOCK` rules, sends
-  `SIGKILL` to the offending PID via `pidfd`.
-- **PREVENTION**: When LSM hooks attach and `enforcement_enabled: true`:
-  - **Exec Prevention**: `bprm_check_security` drops blocked binaries (`-EPERM`) pre-flight. Supports both exact path matching (`BPF_MAP_TYPE_HASH`) and zero-latency path prefix matching (`BPF_MAP_TYPE_LPM_TRIE` for `process.path.startsWith` rules)..
-  - **File Write Prevention**: `lsm/file_open` drops write-intent opens (`O_WRONLY`/`O_RDWR`) on `blocked_write_paths` (`-EPERM`).
-  - **Ptrace Prevention**: When `ptrace_enforcement_enabled`: true and LSM hooks are active, `lsm/ptrace_access_check` blocks unauthorized injection attempts unless the caller matches the `allowed_ptrace_attaches` whitelist.
-  - **Kernel Module Load Prevention**: Intercepts `init_module` calls and blocks them at the kernel boundary when originating from tracked container cgroups registered in the `container_cgroups` BPF map.
-  - **Privilege Escalation Prevention**: `lsm/task_fix_setuid` blocks a process from gaining UID 0 (`-EPERM`) unless it exec'd a setuid-root binary first.
-  - **Agent Self-Protection**:
-    - `lsm/task_kill` intercepts termination signals targeted at K-Guard's PID and rejects them (`-EPERM`) unless sent by K-Guard itself or PID 1.
-    - `lsm/bpf` restricts critical eBPF system calls (`BPF_LINK_DETACH`, `BPF_MAP_GET_FD_BY_ID`, `BPF_PROG_GET_FD_BY_ID`, etc.) to prevent hostile processes from detaching or inspecting K-Guard's in-kernel security filters. On startup, K-Guard uses Go reflection (`reflect`) to inspect the `bpf2go`-generated structs dynamically; this centralizes object registration so newly added maps, programs, and active link IDs are automatically protected in the kernel without requiring manual Go code updates.
-  - **Reverse-Shell Prevention**: `sys_enter_dup2` and `sys_enter_dup3` monitor file descriptor cloning. If an active network socket is duplicated onto standard I/O handles (`0`, `1`, or `2`), state is tracked in BPF task storage across `fork()` calls. When `lsm/bprm_check_security` fires, K-Guard pre-emptively blocks shell execution (`-EPERM`).
-
-An enforcement kill-switch (`enforcement_enabled` BPF array map) lets you
-disable LSM blocking instantly at runtime without detaching or reloading
-any programs. Detection keeps running either way.
-
-Kill-switches and self-protection state (`enforcement_enabled`,
-`ptrace_enforcement_enabled`, `kmod_enforcement_enabled`, `self_pid`) are
-plain BPF global variables (`.bss`), not map entries. Userspace reads/writes
-them via cilium/ebpf's `*ebpf.Variable` API (`m.Objects.EnforcementEnabled.Set(...)`)
-rather than a raw map lookup, requires `github.com/cilium/ebpf` v0.17+.
-
-## Rule engine & Configuration Formats
-
-K-Guard supports both **YAML** and **JSON** configuration files (auto-detected via file extension or structural fallback). Configs are reloaded via `SIGHUP` or a 5-second poll loop.
-
-Configuration files are unmarshaled directly into standard Go structs, and CEL ASTs are pre-compiled and initialized once (`sync.Once`) upfront to keep the engine format-agnostic and ultra-fast during runtime evaluation. Type-safe field evaluation (`event`, `process`) is powered by Protocol Buffers bindings generated from `.proto` definitions (`internal/pb`), providing strict schema enforcement at rule compilation time.
-
-### Rule Structure
-
-Rules are evaluated using Common Expression Language (CEL), providing flexibility when inspecting event fields (`process.path`, `process.basename`, `process.sha256`, `event.is_suspicious_path`, etc.):
-
-* **`name`**: Friendly name for the rule.
-* **`severity`**: `low` \| `medium` \| `high` \| `critical`.
-* **`action`**: 
-  * `ALERT`: Generate alert only.
-  * `KILL`: Terminate process post-exec via `pidfd_send_signal`.
-  * `BLOCK`: Sync path or prefix to in-kernel LSM map for pre-exec block (falls back to `KILL` for basename matches).
-* **`mode`**:  `enforce` | `audit` (defaults to `enforce` if omitted).
-  * `enforce`: Active enforcement. Pre-exec LSM blocks drop binary execution (`-EPERM`), and post-exec matches terminate the process (`SIGKILL`).
-  * `audit` *(Shadow / Dry-Run)*: Safely tests rules in production. Telemetry, SIEM alerts, and compliance audit log entries are generated, but binary execution is allowed and process kills are suppressed.
-* **`expression`**: CEL expression evaluated against the event context.
-
-### Example Configurations
+Minimal config:
 
 ```yaml
+enforcement_enabled: true
+
 rules:
   - name: "block-netcat"
     severity: "critical"
     action: "BLOCK"
-    mode: "enforce"
-    expression: "process.basename == 'nc'"
-
-  - name: "tmp-exec"
-    severity: "high"
-    action: "KILL"
-    mode: "audit"
-    expression: "process.path.startsWith('/tmp/') && event.is_suspicious_path"
-
-  - name: "known-malware-hash"
-    severity: "critical"
-    action: "KILL"
-    expression: "process.sha256 == '<hex digest>'"
-
-enforcement_enabled: true
-dedup_window_seconds: 10
-
-allowlist:
-  - "/usr/bin/ssh"
-
-protected_comms:
-  - "/usr/sbin/sshd"
-  - "/usr/bin/systemd"
-
-suspicious_path:
-  - "/testkill/"
-  - "/tmp/"
-
-sensitive_write_paths:
-  - "/etc/"
-  - "/root/.ssh/"
-
-blocked_write_paths:
-  - "/etc/passwd"
-
-ignored_connect_comms:
-  - "/usr/bin/dockerd"
-
-ptrace_enforcement_enabled: true
-max_memory_mb: 256
-allowed_ptrace_attaches:
-  - "/usr/bin/gdb"
-  - "/usr/bin/dlv"
-
-kmod_enforcement_enabled: true
-
-proc_path: "/proc"
-cgroup_path: "/sys/fs/cgroup"
-kubelet_url: "https://127.0.0.1:10250"
-kubelet_insecure: false
-kubelet_cert_file: "/var/lib/rancher/k8s/server/tls/client-admin.crt"
-kubelet_key_file: "/var/lib/rancher/k8s/server/tls/client-admin.key"
+    expression: "process.path == '/usr/bin/nc'"
 
 sinks:
   stdout: true
-  syslog: true
-  webhook_url: "https://example.com/hooks/kguard"
-  slack_webhook_url: "https://hooks.slack.com/services/..."
-  store_path: "/var/lib/kguard/alerts"
-  audit_log_path: "/var/log/kguard/audit.log"
-  metrics_listen_addr: ":9090"
-  dashboard_listen_addr: ":8080"
 ```
 
-**JSON Support**: K-Guard auto-detects JSON files (`.json`) or JSON payloads as well. All field keys map 1:1 with the YAML structure above:
-
-```json
-
-{
-  "enforcement_enabled": true,
-  "rules": [
-    { "name": "Block netcat", "severity": "critical", "action": "BLOCK", "expression": "process.path == '/usr/bin/nc'" }
-  ]
-}
-```
-
-Duplicate alerts for the same `(rule, pid)` (or `(connect/sendto, pid, dest_ip)`,
-or `(event_type, pid)` for the generic sensors) within
-`dedup_window_seconds` are suppressed after the first.
-
-Kernel Lineage & State Tracking: eBPF tracks context across child forks via `BPF_MAP_TYPE_TASK_STORAGE` attached directly to `struct task_struct`, utilizing `bpf_get_current_task_btf()` for instant BTF pointer resolution and automatic kernel-side memory cleanup on process exit.
-
-An LRU cache in userspace maps `pid` -> `ppid` entries to reconstruct and log the visual process execution tree on alert.
-
-Outbound connects from processes whose resolved bin matches `ignored_connect_comms`
-(e.g. `["/usr/sbin/sshd"]`) are filtered before reaching the engine at all, as are
-any loopback destinations (`127.0.0.0/8`, `::1`), both are near-always
-background/tunnel noise rather than signal worth alerting on.
-
-`sensitive_write_paths` raise a `SENSITIVE_WRITE` alert (audit/detect only). By contrast, `blocked_write_paths` are synced into an in-kernel BPF map where the `lsm/file_open` hook actively drops the system call with `-EPERM` if any process tries to open them with write intent.
-
-When evaluating `sha256` rules:
-- **Zero-Buffer Streaming**: Executables are streamed directly off disk via `io.Copy`, preventing memory spikes or allocations when inspecting large binaries.
-- **Cross-PID In-Memory LRU Cache**: Hashes are indexed in a thread-safe LRU cache (`globalHashCache`) keyed by canonical path, inode, mtime, and file size. Subsequent executions across PIDs hit RAM instantly without duplicate disk I/O.
-
-### Dry-Run / Shadow Mode (`mode: audit`)
-
-To safely test new policies or quantify rule impact in production without risk of breaking services, rules can be run in dry-run mode by setting `mode: audit`:
-
-* **In-Kernel Pre-Exec Blocks (`action: BLOCK`)**:
-  Path and prefix block maps sync enforcement modes (`1 = ENFORCE`, `2 = AUDIT`) directly to the kernel. When a binary execution hits a rule configured in `audit` mode, the `lsm/bprm_check_security` hook emits an `EVT_EXEC_BLOCKED` event over the ring buffer to maintain full SIEM/telemetry visibility, but returns `0` to allow the process to run normally.
-* **Post-Exec Terminations (`action: KILL`)**:
-  When a process matches a `KILL` rule set to `mode: audit`, K-Guard generates an alert marked with `mode: "audit"` and a `[SHADOW MODE]` detail prefix, while suppressing `pidfd_send_signal` execution.
-* **Audit Trail Compliance Visibility**:
-  Shadow matches are recorded in the compliance audit log (`sinks.audit_log_path`) alongside MITRE ATT&CK taxonomy tags, recording the decision and clarifying that enforcement was suppressed due to audit mode.
-
-## MITRE ATT&CK Framework Mapping
-
-K-Guard supports native **MITRE ATT&CK** taxonomy tagging inside rules. When rules trigger, threat metadata (tactic, technique ID, technique name, and custom tags) flows directly into all alert outputs and compliance audit logs.
-
-### Mapping MITRE ATT&CK to Rules
-
-Add an optional `mitre` block to any rule definition in **YAML** or **JSON**:
-
-```yaml
-rules:
-  - name: "block-netcat-c2"
-    severity: "critical"
-    action: "BLOCK"
-    expression: "process.path == '/usr/bin/nc.openbsd'"
-    mitre:
-      tactic: "Command and Control"
-      technique_id: "T1095"
-      technique: "Non-Application Layer Protocol"
-      tags: ["c2", "egress"]
-```
-
-## Sigma Rule Transpilation
-
-K-Guard includes a built-in transpiler that converts community [Sigma detection rules](https://github.com/SigmaHQ/sigma) (YAML) into native K-Guard CEL expressions and populates MITRE ATT&CK taxonomy metadata automatically.
-
-### Usage
+Try a rule offline, with no eBPF needed:
 
 ```bash
-./k-guard -convert-sigma rules/linux/process_creation/proc_creation_lnx_nc.yml
-```
-
-* **Process Creation Taxonomy:**
-  * `Image` -> `process.path`
-  * `OriginalFileName / process.basename` -> `process.basename`
-  * `ParentImage` -> `event.ancestor_filename`
-  * `Hashes.SHA256` -> `process.sha256`
-  * `User` -> `process.uid`
-
-* **Operators:** String modifiers (`|endswith`, `|startswith`, `|contains`) are automatically transpiled into CEL methods (`.endsWith()`, `.startsWith()`, `.contains()`).
-* **ATT&CK TAGS:** Sigma `tags` (e.g. `attack.t1059.004`, `attack.execution`) are extracted directly into K-Guard's native `mitre` metadata block.
-
-> **Note on Scope & Compatibility:** This initial transpiler focuses on Linux process creation and single-event detection rules (`process_creation`). Advanced Sigma constructs, such as multi-event temporal correlations (`near`), complex aggregation pipelines, or userspace log categories (e.g., `systemd journal` or `auth.log` lines) are not yet supported and should be audited manually before deployment. 
-
-## Config validation
-
-K-Guard refuses to start (or reload) if the config fails validation.
-Common gotchas:
-
-- **CEL Expression Syntax Validation**: K-Guard pre-compiles and 
-  validates `CEL` syntax on startup/reload and will reject invalid 
-  expressions (e.g., syntax errors, unparseable operators, or invalid field accesses).
-- **Offline CEL Rule Testing**: Test and verify custom CEL rules against mock data 
-  using `-test-rule` (and optional `-test-event`) directly from the CLI without needing a 
-  running eBPF environment.
-- **YAML/JSON Flexibility**: Parser logic auto-detects `YAML` or `JSON` format 
-  regardless of the file extension fallback.
-- **empty strings in path/comm lists.** `suspicious_path`,
-  `sensitive_write_paths`, `blocked_write_paths`, `allowlist`,
-  `protected_comms`, `ignored_connect_comms`, and
-  `allowed_ptrace_attaches` reject `""` entries, an empty pattern
-  would otherwise match every path via comparison, making it a wildcard.
-- **`protected_comms`, `ignored_connect_comms`**, and
-  `allowed_ptrace_attaches` are absolute paths, not process names.
-  Each configured path is opened once and resolved to a `(device, inode)`
-  identity via a held file descriptor, matching against the real
-  underlying binary rather than the `comm` mutable field, which could
-  be rewritten via `prctl(PR_SET_NAME)` or simply by being exec'd
-  under a different name. Validation rejects any entry that isn't an
-  absolute path.
-- **Symlinks and self-relocating binaries need their stable path**, not a
-  transient one. `os.Open` follows symlinks, so pointing these fields
-  at a maintained symlink (e.g. k3s's
-  `/var/lib/rancher/k3s/data/current/bin/k3s`) is fine and recommended
-  when the underlying binary moves between versions/restarts, pin the
-  symlink, not a path containing a build hash or other value that
-  changes on upgrade. If the pinned target changes on disk without a
-  config reload, K-Guard keeps enforcing against the *old* identity
-  until the next `SIGHUP`/poll reload re-resolves it, noisier, not
-  silently permissive.
-- **Strict parsing.** Unknown keys are rejected in both YAML and JSON, so a
-  typo like `enforcment_enabled` fails at load instead of silently leaving
-  enforcement off.
-- **Config size limit.** Files over 1 MiB, and anything that isn't a regular
-  file (FIFOs, devices), are refused.
-- **BLOCK rules and the kernel.** A `BLOCK` rule is synced to the in-kernel
-  LSM map only if its whole expression is exactly `process.path == '<abs path>'`
-  or `process.path.startsWith('<abs prefix>')`. Any other expression (compound
-  conditions, negation, basename matches) is enforced post-exec via `KILL`,
-  and a log line says so at load time.
-- **Expressions must return bool.**
-
-## Config file permissions
-
-K-Guard refuses to read a config file if:
-
-- it is group or world-writable (use `chmod 600` or stricter), or
-- it is owned by a different UID than the one K-Guard runs as (skipped when running as root), or
-- it is not a regular file.
-
-A world-writable rules file would let any local user disable
-enforcement or add their own binary to the allowlist.
-
-## Reload diffing
-
-On every hot reload, K-Guard logs what actually changed in the config (rules added/removed/modified, rule mode toggles between `enforce` and `audit`, allowlist/path/comm list changes, enforcement toggles, etc.) instead of just "config reloaded". Auth tokens are never logged, only that they changed.
-
-## Identity-based trust (protected_comms, ignored_connect_comms, allowed_ptrace_attaches)
-
-These three lists used to match against the kernel's `comm` field,
-short, human-readable, and trivially spoofable, since any process can
-rewrite its own `comm` at will and the kernel itself sets `comm` from
-whatever name a binary was exec'd under. K-Guard now resolves each
-configured entry to the real file it points at:
-
-- Each path is opened safely via `O_PATH` handles (`O_PATH | O_NONBLOCK | O_CLOEXEC`), kept pinned via a held file descriptor (not repeatedly re-`stat`'d), and identified by its `(device, inode)` pair: the same identity the kernel's own VFS layer uses.
-- Before pinning, K-Guard verifies binary integrity and refuses to trust any file that is not owned by root (`uid == 0`) or is group/world-writable (`mode & 0022 != 0`).
-- `allowed_ptrace_attaches` is enforced entirely in-kernel: the
-  `ptrace_access_check` LSM hook resolves the *calling* process's own
-  `mm->exe_file` and looks it up directly in a kernel map keyed by
-  `(dev, ino)`.
-- `ignored_connect_comms` is resolved the same way in-kernel, every
-  event's header carries the emitting process's resolved exe identity
-  and checked in userspace.
-- `protected_comms` is checked at the moment of a kill attempt by
-  re-resolving the *live* pid's current `/proc/<pid>/exe`, rather than
-  trusting whatever `comm` the triggering event carried, so a rename or
-  a config change between event and kill can't be exploited either way.
-
-Device numbers are normalized (major/minor decode + kernel-layout
-re-encode) before comparison, since the raw `dev_t` encoding used by
-`stat(2)` in userspace differs from the raw value the kernel exposes
-via `inode->i_sb->s_dev`. All three lists are hot-reloaded the same way
-as everything else, via `SIGHUP`/the 5-second poll.
-
-### Asynchronous Execution & Bypasses
-
-- **`IO_URING` Monitoring**: `io_uring` allows applications to bypass standard synchronous syscall entry points (like `openat` or `connect`) by submitting async Submission Queue Entries (SQE). K-Guard hooks `io_uring_submit_req` to inspect opcodes and extract file paths or socket targets submitted directly through ring buffers.
-
-## Kubernetes context enrichment
- 
-When running on a Kubernetes node, K-Guard resolves each alert's cgroup
-back to the owning Pod/container and attaches that context before
-dispatch. Resolution works even if the process has already exited by
-the time enrichment runs:
- 
-1. The originating cgroup path is read from `/proc/<pid>/cgroup`. If the
-   PID is already dead, K-Guard falls back to walking `cgroup_path`
-   looking for a directory whose inode matches the eBPF-reported cgroup
-   ID.
-2. The cgroup path is parsed (systemd scope naming, cgroupfs raw hex IDs,
-   and pod-UID directory naming are all recognized) to extract a
-   container ID, container runtime, and/or Pod UID.
-3. That's cross-referenced against a local cache of the Kubelet's `/pods`
-   API to resolve the Pod name and namespace.
-Enriched alerts carry `container_id`, `pod_name`, `namespace`,
-`pod_uid`, and `runtime` fields whenever resolution succeeds; alerts
-from non-Kubernetes processes (or ones K-Guard can't resolve) are
-dispatched with those fields empty rather than being held back.
- 
-Configure it via these optional top-level config keys:
- 
-| Key | Default | Notes |
-|---|---|---|
-| `proc_path` | `/proc` | override for containerized/chrooted K-Guard deployments |
-| `cgroup_path` | `/sys/fs/cgroup` | |
-| `kubelet_url` | `http://127.0.0.1:10255` | the Kubelet's read-only or authenticated API |
-| `kubelet_insecure` | `false` | skip TLS certificate verification; not recommended outside of testing |
-| `kubelet_cert_file` / `kubelet_key_file` | unset | client cert/key pair for mTLS against an HTTPS Kubelet endpoint. Must both be set together, or both left unset. On k8s these are typically `/var/lib/rancher/k8s/server/tls/client-admin.crt` / `.key`; other distributions will have a different client-cert location or may use a bearer token instead |
- 
-Resolved pod/container metadata is cached (LRU, keyed by cgroup ID and
-PID) so repeat lookups for the same process don't hit the Kubelet API on
-every event. The Kubelet's pod list itself is refreshed on a 30-second
-background sync, plus once synchronously (3s timeout) at startup so the
-cache is warm before the first eBPF events arrive.
- 
-> **Note:** the K8s keys (`proc_path`, `cgroup_path`,
-> `kubelet_insecure`) are read once at startup.
-> so unlike `kubelet_cert_file`, `kubelet_key_file`, `kubelet_url`.
-> which are hot-reloadable, the first three aren't.
-
-### Container Escape & Namespace Security
-
-K-Guard tracks process namespace mutations to detect container breakout techniques:
-* **Namespace Hopping (`setns`)**: Intercepts attempts by processes to join existing host/pod namespaces (e.g., using `nsenter` to attach to PID 1 or host mount namespaces).
-* **Isolation Breakdown (`unshare`)**: Flags processes creating new unshared namespaces (e.g., `CLONE_NEWNS`, `CLONE_NEWPID`) from within tracked container cgroups (`container_cgroups`), catching early-stage privilege escalation and escape vectors.
-
-## Alert sinks
-
-- **stdout** : human-readable, multi-line per alert. Promotes lineage-flagged events, and renders visual (`Process Lineage Trace`) showing root ancestors and parent chains.
-- **syslog** : JSON body, severity mapped to a syslog level
-- **webhook** : POSTs `{ "text": <summary>, "alert": <Alert> }` as JSON
-- **slack** : POSTs clean, formatted Markdown alert messages directly to Slack or Discord webhooks (`sinks.slack_webhook_url`)
-- **store** : append-only, date-rotated JSON-Lines files; backs the
-  dashboard and its `/api/alerts` JSON endpoint
-- **metrics** : Prometheus text exposition at `/metrics`
-  (`kguard_events_total`, `kguard_rule_hits_total`, `kguard_kills_total`,
-  `kguard_kill_errors_total`, `kguard_blocks_total`,
-  `kguard_ringbuf_drops_total`, `kguard_sink_errors_total`,
-  `kguard_hash_check_errors_total`)
-
-Each sink runs on its own bounded queue and delivery goroutine, so a
-slow or stuck sink only drops alerts for itself, it never blocks the
-ring buffer reader or other sinks.
-
-## Kernel-Level DNS Interception & IP-to-Domain Correlation
-
-K-Guard intercepts DNS traffic and correlates outbound IP connections (`CONNECT`, `SENDTO`) with resolved domain names in real time without relying on external loggers.
-
-### Why TC (`clsact`) Over Syscall Tracing
-
-Tracing syscalls like `sendto` or `connect` fails to capture all DNS traffic because applications use fragmented socket APIs (`sendmsg`, `write`, `io_uring`), while local resolvers (`systemd-resolved`, `dnsmasq`) decouple the application PID from the upstream query. 
-
-Attaching eBPF classifiers to the Traffic Control (`clsact`) qdisc (`tc_egress_dns` / `tc_ingress_dns`) provides:
-* **100% Packet Coverage:** Captures all UDP/53 traffic at Layer 3/4 across every interface (`eth0`, `veth*`, `lo`) regardless of application runtime or syscall.
-* **Low Overhead:** Code executes strictly on port 53 packets rather than every system socket call.
-* **Deterministic Pairing:** Pairs queries and answers with 100% precision using the 16-bit **DNS Transaction ID (TXID)** and ephemeral client port.
-
-### System Mechanics
-
-1. **Outbound Query Capture (`tc_egress_dns`):** Intercepts egress UDP queries on port 53, extracts the resolver IP, client port, TXID, QNAME, and container `cgroup_id`, storing them in the `dns_pending_tx` LRU map keyed by `(Resolver IP, Client Port, TXID)`.
-2. **Inbound Answer Parsing (`tc_ingress_dns`):** Matches incoming UDP responses on port 53 against `dns_pending_tx`. Parses A (IPv4) or AAAA (IPv6) records, emits an `EVT_DNS_ANSWER` event over the ring buffer, and purges the pending map entry.
-3. **Two-Tiered Correlation Cache:** Userspace maintains an **`ipScoped`** cache (`{cgroup_id, IP}`) for isolated container matching and an **`ipFallback`** cache (`{IP}`) to resolve cross-process lookups from local resolver proxies.
-4. **Alert Enrichment:** Egress network handlers query the correlator by destination IP, enriching alert details automatically.
-
-
-## Production Operational Audit Trail (SOC2 / PCI Compliance)
-
-K-Guard maintains a dedicated, structured **Audit Trail** for every active enforcement decision (`BLOCK`, `KILL`) it executes. This operational record is deliberately separated from the general alert stream: while alerts capture all interesting security telemetry (and may be rate-limited or deduplicated), the audit log is an authoritative, un-deduplicated control log intended for compliance frameworks (SOC2, PCI-DSS, ISO 27001).
-
-### Zero-Overhead Async Architecture
-
-To ensure audit logging never introduces latency into kernel event processing or syscall interception loops, the audit pipeline is built with a zero-allocation, lock-free architecture:
-
-* **Non-Blocking Async Channel Worker:** When an enforcement hook fires, the engine pushes a light struct into a 10,000-element buffered channel and immediately resumes execution. Disk I/O runs entirely on a background goroutine.
-* **Zero-Allocation String Formatting:** Instead of using Go's default `json.Marshal` (which relies on expensive runtime reflection and triggers GC heap allocations), the worker formats NDJSON bytes directly into a reused memory buffer using zero-allocation primitives (`strconv.AppendQuote`, `strconv.AppendUint`).
-* **Batched I/O Flushing:** The background worker writes via a `64KB` `bufio.Writer`, batching up to ~500 enforcement events into a single physical disk write call.
-
-### Schema Example (`NDJSON`)
-
-Log entries are written as Newline-Delimited JSON (NDJSON) to `sinks.audit_log_path` (defaulting to `/var/log/kguard/audit.log`), making them natively ingestible by Datadog, Splunk, Vector, or Elastic:
-
-```json
-{"timestamp":"2026-09-21T20:12:00.123456Z","decision":"BLOCK","event_type":"EXEC_BLOCKED","pid":16274,"ppid":11944,"uid":501,"comm":"nc","cgroup_id":123456,"target":"/usr/bin/nc","reason":"LSM pre-exec hook blocked binary execution"}
-{"timestamp":"2026-09-21T20:15:22.987654Z","decision":"KILL","event_type":"EXEC","rule_name":"block-tmp-exec","pid":18201,"ppid":1402,"uid":0,"comm":"malware","cgroup_id":123456,"target":"/tmp/malware","reason":"Process killed post-exec via rule action"}
-```
-
-## Dashboard & Metrics
-
-Both the dashboard (`sinks.dashboard_listen_addr`) and metrics
-(`sinks.metrics_listen_addr`) HTTP servers support optional bearer-token
-auth. If no token is configured, the server still starts but logs a
-warning and serves without authentification, fine for `127.0.0.1`-only binding
-plus SSH port-forwarding, but might be a problem if the address is reachable from
-elsewhere.
-
-Set a token via config:
-
-```json
-"sinks": {
-  "dashboard_auth_token": "<random token>",
-  "metrics_auth_token": "<random token>"
-}
-```
-
-or, preferably, via environment variables (kept out of the
-permission-checked but still plaintext config file), which take
-precedence over the config value if both are set:
-
-```bash
-export KGUARD_DASHBOARD_TOKEN="$(openssl rand -hex 32)"
-export KGUARD_METRICS_TOKEN="$(openssl rand -hex 32)"
-```
-
-When testing manually using `sudo`, remember `sudo` resets the
-environment by default so use `sudo -E` to keep your exported
-tokens, or source them from a file `sudo` can read as root.
-
-A `/healthz` endpoint (unauthenticated, no bearer token needed) is served
-alongside `/metrics` for liveness probes, reports uptime, active sensors,
-LSM status, build revision, and seconds since the last event was read from
-the ring buffer.
-
-- **Structured Logging (`slog`)**: All daemon operations emit structured key-value logs tagged with explicit `component` attributes (`engine`, `ebpf`, `trust`, `k8s`, `config`, `dashboard`, `alert`, `audit`).
-
-## Safety guarantees
-
-K-Guard guarantees both self-preservation and protection against accidental collateral damage:
-- **In-Kernel Self-Defense**: Active LSM hooks (`lsm/task_kill` and `lsm/bpf`) prevent non-PID 1 external processes from sending termination signals or detaching/modifying K-Guard's eBPF map descriptors and links.
-- **Process Safe-List**: K-Guard will never `SIGKILL` PID 1, its own PID, any PID listed in `protected_pids`, or any process whose live `/proc/<pid>/exe` identity matches `protected_comms`.
-
-Kills go through `pidfd_open` + `pidfd_send_signal` rather than a raw
-`kill()` by PID, so a PID that has already exited and been recycled by
-the kernel for an unrelated process can't be killed by mistake.
-
-## Memory Safety 
-
-To prevent memory bloat or memory leaks under heavy syscall load on high-throughput nodes:
-- **Max RSS Memory Valve (`max_memory_mb`)**: Monitors K-Guard's runtime memory allocation every 10 seconds. If memory allocation exceeds the configured threshold (`max_memory_mb`), K-Guard automatically triggers an immediate Garbage Collection (`runtime.GC()`) to reclaim memory and stabilize RSS footprint.
-
-## ML Telemetry Pipeline & Anomaly Dataset
-
-K-Guard includes an asynchronous, non-blocking telemetry tap designed for behavioral baselining and machine learning model training.
-
-- **Tamper-Proof Inode Identification**: Trains directly on filesystem `(dev, ino)` integer pairs (`parent_exe_ino` $\rightarrow$ `exe_ino`) rather than spoofable process string names (`comm` or path strings). Training on raw 64-bit integers speeds up offline graph generation and model training.
-- **Zero-Allocation Binary Storage**: Events are written directly as raw 56-byte Little-Endian fixed structs (`binary.Write`) to `/var/lib/kguard/telemetry.bin`. Storing packed binary structs avoids string allocations, JSON encoding, and CPU overhead inside the agent event loop.
-- **Non-Blocking Channel Tap**: Telemetry is dispatched over a buffered Go channel (`telemetryChan`). If the telemetry consumer falls behind under heavy system load, dropped telemetry samples preserve core agent enforcement latency.
-
-> **Note:** This telemetry pipeline is the foundational first step toward an automated ML-supported anomaly prevention system.
-
-### Inspecting Telemetry Data
-
-To verify that the dataset pipeline is recording active transitions, run the provided Python inspection script. Because `/var/lib/kguard/telemetry.bin` is written with root-only permissions (`0600`), run the script with `sudo`:
-
-```bash
-sudo python3 scripts/inspect_telemetry.py
-```
-
-The script unpacks the 56-byte binary structures, aggregates parent-child execution frequencies, and resolves inodes back to human-readable binary paths on disk.
-
-> **Note:** The `inspect_telemetry.py` script is intended solely as a quick verification tool to confirm that the telemetry pipeline is active and writing binary records correctly. Some inodes may display as `ino:XXXXX` because the script only scans basic system directories (`/bin`, `/usr/bin`, `/sbin`, `/usr/sbin`) rather than performing full system-wide or container filesystem resolution.
-
-## Testing & Troubleshooting
-
-**Testing LSM Hooks Note** : When testing security hooks like `PTRACE`, keep kernel credential checks (`__ptrace_may_access`) in mind. Non-root users targeting root processes (like PID 1) will be rejected by the kernel with `-EPERM` before reaching the eBPF LSM layer. To test eBPF-level dropping and event emission correctly, run tests with appropriate capabilities/root or target processes owned by the same user.
-
-**Testing the PMU sensor Note** : The `BRANCH_MISPREDICT` sensor can't be exercised end-to-end on most local dev VMs (see above) : `ls /sys/bus/event_source/devices/` for a `cpu*` entry before assuming it's working, and check the startup log for `PMU branch-mispredict sensor` either way. A no-PMU host is expected in plenty of environments, not a bug on its own so the rest of K-Guard runs unaffected.
-
-## Self-Healing & Crash-Loop Protection
-
-K-Guard includes a built-in process supervisor mode to protect against crash loops and ensure system stability:
-
-* **Built-in Supervisor (`--supervisor`)**: Spawns and monitors a child worker process. If an unexpected panic occurs, the supervisor automatically restarts the agent after a brief backoff.
-* **Rate-Limited Fail-Open Safeguard**: If the agent crashes more than 5 times within 5 minutes, the supervisor stops restarting and exits cleanly.
-* **Kernel-Level Fail-Open Guarantee**: When K-Guard exits, the kernel automatically closes open `bpf_link` file descriptors, immediately detaching all LSM hooks and restoring normal kernel behavior without locking or bricking the host.
-
-### Usage
-```bash
-# Run with built-in supervisor protection
-sudo ./k-guard -config /etc/k-guard/config.yaml -supervisor
-```
-
-## Running
-
-```
-sudo ./k-guard -config /config/rules.json
-
-# Validate a config without touching the kernel:
-sudo ./k-guard -config /config/rules.json -check
-
-# Test a CEL rule expression against default mock event context
 ./k-guard -test-rule "process.basename == 'nc'"
-
-# Test a CEL rule against inline JSON or a mock event file
-./k-guard -test-rule "process.path.startsWith('/tmp/')" -test-event '{"event": {"process": {"path": "/tmp/malware"}}}'
-./k-guard -test-rule "process.basename == 'nc'" -test-event ./mock_event.json
-
-# Transpile a Linux Sigma YAML rule into K-Guard CEL format
-./k-guard -convert-sigma /path/to/sigma_rule.yml
-
-Print build/version info:
-./k-guard -version
 ```
 
-Send `SIGHUP` to force an immediate config reload; `SIGINT`/`SIGTERM`
-for graceful shutdown (all sinks are drained before exit).
+Send `SIGHUP` to reload the config immediately. `SIGINT`/`SIGTERM` shut down gracefully.
 
-See `BUILD.md` for how to build the eBPF objects and the Go binary.
+## Documentation
 
-## Testing
-
-K-Guard uses a split testing strategy: pure Go unit tests run anywhere in non-privileged mode, while eBPF kernel integration tests run conditionally when executed as root on Linux.
-
-### Run Unit Tests (Non-Privileged / Cross-Platform)
-
-Tests parser logic, path normalization, map byte alignment, string representation, and BPF spec loading:
-
-```bash
-go test -v ./...
-```
-
-### Run Kernel Integration Tests (Linux + Root Required)
-
-To execute full eBPF map interactions and program loader attachment tests, run as root:
-
-```bash
-sudo go test -v ./internal/ebpf/...
-```
-
-- Integration tests automatically skip on non-Linux platforms or non-root runners.
-
-### Fuzzing
-
-The config parser, Sigma converter, and CEL expression evaluator are fuzzed
-with Go's native fuzzing, since they process untrusted-ish input (config
-files, imported Sigma rules, rule expressions).
-
-| Target | Package | Covers |
-|---|---|---|
-| `FuzzParseConfig` | `internal/config` | YAML/JSON parsing, defaults, validation, BLOCK path extraction |
-| `FuzzSigma` | `internal/config` | Sigma -> CEL conversion (output must always compile) |
-| `FuzzTestExpression` | `internal/processor` | CEL compile + evaluation against a mock event |
-
-Each target asserts more than "doesn't panic": accepted rules must have a
-compiled program, extracted block paths must be clean, and parsing must
-finish within 500ms.
-
-```bash
-go test -fuzz=FuzzParseConfig -fuzztime=2m ./internal/config/
-go test -fuzz=FuzzSigma -fuzztime=2m ./internal/config/
-go test -fuzz=FuzzTestExpression -fuzztime=2m ./internal/processor/
-```
-
-Only one target can run per `-fuzz` invocation. Add `-parallel=1` on a laptop
-or small VM. Crashing inputs are saved to `testdata/fuzz/<Target>/` and are
-replayed as regression tests by a plain `go test ./...`.
+| Doc | Contents |
+|---|---|
+| [Sensors](docs/sensors.md) | Every event K-Guard watches, hooks used, PMU and io_uring notes |
+| [Prevention & self-protection](docs/prevention.md) | Operating modes, LSM enforcement, kill-switches, safety guarantees, supervisor |
+| [Configuration](docs/configuration.md) | Full config reference, validation rules, file permissions, hot reload |
+| [Writing rules](docs/rules.md) | CEL rules, audit/shadow mode, MITRE mapping, Sigma transpiler |
+| [Identity-based trust](docs/identity-trust.md) | How `protected_comms`, `ignored_connect_comms`, `allowed_ptrace_attaches` work |
+| [Enrichment](docs/enrichment.md) | Kubernetes context, container escape detection, DNS correlation |
+| [Sinks & metrics](docs/sinks.md) | Alert sinks, dashboard, Prometheus, auth tokens, `/healthz` |
+| [Audit log](docs/audit-log.md) | SOC2/PCI-oriented enforcement audit trail |
+| [Telemetry](docs/telemetry.md) | ML telemetry pipeline and anomaly dataset |
+| [Development](docs/development.md) | Testing, fuzzing, troubleshooting |
 
 ## License
 
