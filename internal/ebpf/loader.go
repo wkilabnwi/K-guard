@@ -66,6 +66,8 @@ func NewManager() (*Manager, error) {
 		{"sched", "sched_process_fork", "tp_schedfork", m.Objects.TpSchedfork},
 		{"syscalls", "sys_enter_connect", "tp_connect", m.Objects.TpConnect},
 		{"syscalls", "sys_enter_sendto", "tp_sendto", m.Objects.TpSendto},
+		{"syscalls", "sys_enter_sendmsg", "tp_sendmsg", m.Objects.TpSendmsg},
+		{"syscalls", "sys_enter_sendmmsg", "tp_sendmmsg", m.Objects.TpSendmmsg},
 		{"syscalls", "sys_enter_openat", "tp_openat", m.Objects.TpOpenat},
 		{"syscalls", "sys_enter_openat2", "tp_openat2", m.Objects.TpOpenat2},
 		{"syscalls", "sys_enter_ptrace", "tp_ptrace", m.Objects.TpPtrace},

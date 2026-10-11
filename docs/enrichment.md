@@ -27,7 +27,7 @@ K-Guard captures DNS traffic and correlates outbound connections (`CONNECT`, `SE
 
 ### Why TC (`clsact`) instead of syscall tracing
 
-Tracing `sendto`/`connect` misses DNS traffic because applications use many socket APIs (`sendmsg`, `write`, `io_uring`), and local resolvers (`systemd-resolved`, `dnsmasq`) separate the application PID from the upstream query. Attaching eBPF classifiers to the `clsact` qdisc (`tc_egress_dns` / `tc_ingress_dns`) gives:
+Tracing `sendto`/`sendmsg`/`connect` misses DNS traffic because applications use many socket APIs (`sendmsg`, `write`, `io_uring`), and local resolvers (`systemd-resolved`, `dnsmasq`) separate the application PID from the upstream query. Attaching eBPF classifiers to the `clsact` qdisc (`tc_egress_dns` / `tc_ingress_dns`) gives:
 
 - **Full packet coverage**: all UDP/53 traffic across every interface (`eth0`, `veth*`, `lo`), regardless of runtime or syscall.
 - **Low overhead**: code runs only on port 53 packets.

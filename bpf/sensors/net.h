@@ -393,4 +393,125 @@ int tp_dup3(struct syscall_dup3_args *ctx) {
     return 0;
 }
 
+// sendmsg() sensors
+
+struct syscall_sendmsg_args {
+    unsigned long long common_tp_fields;
+    __s32 syscall_nr;
+    __u32 __pad;
+    __u64 fd;
+    struct user_msghdr *msg;
+    __u64 flags;
+};
+
+
+struct user_msghdr_min {
+    void *msg_name;     
+    int  msg_namelen;    
+};
+
+SEC("tracepoint/syscalls/sys_enter_sendmsg")
+int tp_sendmsg(struct syscall_sendmsg_args *ctx) {
+    if (!ctx->msg) return 0;
+
+    struct user_msghdr_min msg = {0};
+    if (bpf_probe_read_user(&msg, sizeof(msg), ctx->msg) < 0 || !msg.msg_name || msg.msg_namelen == 0) {
+        return 0; // Skip if connected socket or no destination address provided
+    }
+
+    __u16 family = 0;
+    if (bpf_probe_read_user(&family, sizeof(family), msg.msg_name) < 0) {
+        return 0;
+    }
+
+    struct connect_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return 0;
+
+    fill_common(&e->hdr, EVT_SENDTO);
+    e->family = family;
+    e->daddr = 0;
+    __builtin_memset(e->daddr6, 0, sizeof(e->daddr6));
+    e->dport = 0;
+    __builtin_memset(e->unix_path, 0, sizeof(e->unix_path));
+
+    if (family == 2) {
+        struct sockaddr_in_min sa = {0};
+        if (bpf_probe_read_user(&sa, sizeof(sa), msg.msg_name) == 0) {
+            e->daddr = sa.sin_addr;
+            e->dport = ((sa.sin_port & 0xff) << 8) | ((sa.sin_port >> 8) & 0xff);
+        }
+    } else if (family == 10) {
+        struct sockaddr_in6_min sa6 = {0};
+        if (bpf_probe_read_user(&sa6, sizeof(sa6), msg.msg_name) == 0) {
+            __builtin_memcpy(e->daddr6, sa6.sin6_addr, sizeof(e->daddr6));
+            e->dport = ((sa6.sin6_port & 0xff) << 8) | ((sa6.sin6_port >> 8) & 0xff);
+        }
+    } else if (family == 1) {
+        struct sockaddr_un_min sun = {0};
+        bpf_probe_read_user(&sun, sizeof(sun), msg.msg_name);
+        __builtin_memcpy(e->unix_path, sun.sun_path, sizeof(e->unix_path));
+    }
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+struct mmsghdr_min {
+    struct user_msghdr_min msg_hdr;
+    unsigned int           msg_len;
+};
+
+struct syscall_sendmmsg_args {
+    unsigned long long common_tp_fields;
+    __s32 syscall_nr;
+    __u32 __pad;
+    __u64 fd;
+    struct mmsghdr_min *mmsg;
+    __u32 vlen;
+    __u32 flags;
+};
+
+SEC("tracepoint/syscalls/sys_enter_sendmmsg")
+int tp_sendmmsg(struct syscall_sendmmsg_args *ctx) {
+    if (!ctx->mmsg || ctx->vlen == 0) return 0;
+
+    // Inspect the destination address of the first message in the array
+    struct user_msghdr_min msg = {0};
+    if (bpf_probe_read_user(&msg, sizeof(msg), &ctx->mmsg[0].msg_hdr) < 0 || !msg.msg_name || msg.msg_namelen == 0) {
+        return 0;
+    }
+
+    __u16 family = 0;
+    if (bpf_probe_read_user(&family, sizeof(family), msg.msg_name) < 0) {
+        return 0;
+    }
+
+    struct connect_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return 0;
+
+    fill_common(&e->hdr, EVT_SENDTO);
+    e->family = family;
+    e->daddr = 0;
+    __builtin_memset(e->daddr6, 0, sizeof(e->daddr6));
+    e->dport = 0;
+    __builtin_memset(e->unix_path, 0, sizeof(e->unix_path));
+
+    if (family == 2) {
+        struct sockaddr_in_min sa = {0};
+        if (bpf_probe_read_user(&sa, sizeof(sa), msg.msg_name) == 0) {
+            e->daddr = sa.sin_addr;
+            e->dport = ((sa.sin_port & 0xff) << 8) | ((sa.sin_port >> 8) & 0xff);
+        }
+    } else if (family == 10) {
+        struct sockaddr_in6_min sa6 = {0};
+        if (bpf_probe_read_user(&sa6, sizeof(sa6), msg.msg_name) == 0) {
+            __builtin_memcpy(e->daddr6, sa6.sin6_addr, sizeof(e->daddr6));
+            e->dport = ((sa6.sin6_port & 0xff) << 8) | ((sa6.sin6_port >> 8) & 0xff);
+        }
+    }
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
 #endif

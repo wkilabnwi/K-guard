@@ -1020,3 +1020,42 @@ func TestRouter_ReverseShellEvent(t *testing.T) {
 		t.Errorf("unexpected routed reverse shell alert content: %+v", a)
 	}
 }
+
+func TestRouter_SendmsgEgress(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr, nil)
+
+	hdr := kebpf.BPFEventHdr{
+		EventType: uint32(kebpf.EventSendto),
+		Pid:       8001,
+		Ppid:      1,
+		Uid:       1000,
+		Gid:       1000,
+		CgroupId:  1,
+	}
+	copyInt8(hdr.Comm[:], "python3")
+
+	// Simulate sendmsg/sendmmsg ring buffer egress payload
+	evt := kebpf.BPFConnectEvent{
+		Hdr:    hdr,
+		Family: 2, // AF_INET
+		Dport:  53,
+		Daddr:  0x08080808, // 8.8.8.8
+	}
+
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, evt); err != nil {
+		t.Fatalf("failed to pack binary event: %v", err)
+	}
+
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected router to process 1 sendmsg alert, got %d", len(alerts))
+	}
+	if alerts[0].DestIP != "8.8.8.8" || alerts[0].DestPort != 53 {
+		t.Errorf("unexpected sendmsg alert details: %+v", alerts[0])
+	}
+}

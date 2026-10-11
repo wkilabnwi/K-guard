@@ -9,7 +9,7 @@ K-Guard attaches a mix of tracepoint sensors and, when the kernel allows it, BPF
 | `EXEC` | `tracepoint/sched/sched_process_exec` (+ `lsm/task_alloc` for lineage tracking) | Observed *after* the exec has already started |
 | `EXEC_BLOCKED` | `lsm/bprm_check_security` | Pre-exec: the kernel is stopped from ever running the binary |
 | `CONNECT` | `sys_enter_connect` | Outbound connections: IPv4, IPv6 and Unix domain sockets |
-| `SENDTO` | `sys_enter_sendto` | Unconnected socket egress (UDP/DNS exfiltration patterns passing explicit destination addresses) |
+| `SENDTO` | `sys_enter_sendto` / `sys_enter_sendmsg` / `sys_enter_sendmmsg` | Unconnected and complex socket egress (UDP, DNS exfiltration, scatter/gather socket writes) |
 | `OPEN_SENSITIVE` | `sys_enter_openat` / `sys_enter_openat2` | Reads of paths like `/etc/passwd`, `/etc/shadow`, `/root/.ssh` |
 | `SENSITIVE_WRITE` | `sys_enter_openat` / `sys_enter_openat2` | Opens with write intent (`O_WRONLY`/`O_RDWR`) on a configured protected path |
 | `BLOCKED_WRITE` | `lsm/file_open` | Pre-emptively drops writes (`-EPERM`) on `blocked_write_paths` |
@@ -46,6 +46,8 @@ Outbound connects are filtered before reaching the rule engine when:
 Both are almost always background or tunnel noise.
 
 `sensitive_write_paths` raise a `SENSITIVE_WRITE` alert (detect only). `blocked_write_paths` are synced into an in-kernel map where `lsm/file_open` actively drops the call with `-EPERM`.
+
+Unconnected socket egress (`sendto`, `sendmsg`, `sendmmsg`) is inspected for explicit destination addresses (`AF_INET`, `AF_INET6`, `AF_UNIX`). `sendmsg` and `sendmmsg` tracepoints extract target address structures from `user_msghdr` vectors to capture complex socket payloads and batched egress vectors.
 
 ## io_uring monitoring
 

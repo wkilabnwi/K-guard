@@ -208,6 +208,8 @@ const (
 	BPFProgTpPtrace                = "tp_ptrace"
 	BPFProgTpSchedexec             = "tp_schedexec"
 	BPFProgTpSchedfork             = "tp_schedfork"
+	BPFProgTpSendmmsg              = "tp_sendmmsg"
+	BPFProgTpSendmsg               = "tp_sendmsg"
 	BPFProgTpSendto                = "tp_sendto"
 	BPFProgTpSetns                 = "tp_setns"
 	BPFProgTpSetuid                = "tp_setuid"
@@ -295,6 +297,8 @@ type BPFProgramSpecs struct {
 	TpPtrace             *ebpf.ProgramSpec `ebpf:"tp_ptrace"`
 	TpSchedexec          *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
+	TpSendmmsg           *ebpf.ProgramSpec `ebpf:"tp_sendmmsg"`
+	TpSendmsg            *ebpf.ProgramSpec `ebpf:"tp_sendmsg"`
 	TpSendto             *ebpf.ProgramSpec `ebpf:"tp_sendto"`
 	TpSetns              *ebpf.ProgramSpec `ebpf:"tp_setns"`
 	TpSetuid             *ebpf.ProgramSpec `ebpf:"tp_setuid"`
@@ -443,6 +447,8 @@ type BPFPrograms struct {
 	TpPtrace             *ebpf.Program `ebpf:"tp_ptrace"`
 	TpSchedexec          *ebpf.Program `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.Program `ebpf:"tp_schedfork"`
+	TpSendmmsg           *ebpf.Program `ebpf:"tp_sendmmsg"`
+	TpSendmsg            *ebpf.Program `ebpf:"tp_sendmsg"`
 	TpSendto             *ebpf.Program `ebpf:"tp_sendto"`
 	TpSetns              *ebpf.Program `ebpf:"tp_setns"`
 	TpSetuid             *ebpf.Program `ebpf:"tp_setuid"`
@@ -475,6 +481,8 @@ func (p *BPFPrograms) Close() error {
 		p.TpPtrace,
 		p.TpSchedexec,
 		p.TpSchedfork,
+		p.TpSendmmsg,
+		p.TpSendmsg,
 		p.TpSendto,
 		p.TpSetns,
 		p.TpSetuid,
