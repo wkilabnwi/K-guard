@@ -36,6 +36,14 @@ eBPF tracks context across child forks via `BPF_MAP_TYPE_TASK_STORAGE` attached 
 
 A userspace LRU cache maps `pid` → `ppid` to reconstruct and log the process execution tree when an alert fires.
 
+## Drop-and-Exec Correlation
+
+K-Guard correlates file write intent (`SENSITIVE_WRITE` / `sys_enter_openat`) with subsequent binary executions (`EXEC`).
+
+- **Dual-Keying**: Recent writes are cached in the userspace `Correlator` using both normalized canonical paths and filesystem identities (`FileID{Dev, Ino}`)[cite: 35].
+- **Anti-Evasion**: Dual-keying ensures correlation persists across payload copies, renames (`mv`), and symlink modifications.
+- **Correlation Window**: Executions occurring within 30 seconds of a recorded write trigger a `DROP_AND_EXEC` critical alert detailing the writing PID, parent executable name, and elapsed write time.
+
 ## Event filtering
 
 Outbound connects are filtered before reaching the rule engine when:

@@ -16,6 +16,7 @@ import (
 	"k-guard/internal/metrics"
 	"k-guard/internal/pb"
 	"k-guard/internal/safety"
+	"k-guard/internal/trust"
 )
 
 type Engine struct {
@@ -144,6 +145,18 @@ func (e *Engine) AnalyzeExec(meta ProcessMeta, blocked bool) {
 	e.correlator.RecordExec(meta.PID, meta.PPID, meta.Comm, meta.Filename)
 
 	if isAllowlisted(cfg, meta.Filename) {
+		return
+	}
+
+	execID := trust.FileID{Dev: meta.ExeDev, Ino: meta.ExeIno}
+	if writeRec, found := e.correlator.GetRecentWrite(meta.Filename, execID, 30*time.Second); found {
+		dropDetail := fmt.Sprintf("Drop-and-exec vector detected: binary written %v ago by PID %d (%s)",
+			time.Since(writeRec.writtenAt).Round(time.Millisecond),
+			writeRec.writerPID,
+			writeRec.writerComm,
+		)
+		a := meta.ToAlert("DROP_AND_EXEC", config.SeverityCritical, config.ActionAlert, dropDetail)
+		e.emit(a)
 		return
 	}
 

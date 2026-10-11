@@ -2,10 +2,17 @@ package processor
 
 import (
 	"fmt"
+	"k-guard/internal/trust"
 	"net"
 	"strings"
 	"time"
 )
+
+type fileWriteRecord struct {
+	writtenAt  time.Time
+	writerPID  uint32
+	writerComm string
+}
 
 type ProcessNode struct {
 	Pid      uint32
@@ -31,17 +38,21 @@ type ipKey struct {
 // a lot of programs run execve(), the same thing is true for connect()
 // but running them in a very short window is much more suspicious
 type Correlator struct {
-	window     time.Duration
-	cache      *lruCache[uint32, ProcessNode]
-	ipScoped   *lruCache[ipKey, ipRecord]
-	ipFallback *lruCache[string, ipRecord]
+	window           time.Duration
+	cache            *lruCache[uint32, ProcessNode]
+	ipScoped         *lruCache[ipKey, ipRecord]
+	ipFallback       *lruCache[string, ipRecord]
+	recentPathWrites *lruCache[string, fileWriteRecord]
+	recentIDWrites   *lruCache[trust.FileID, fileWriteRecord]
 }
 
 func NewCorrelator(window time.Duration) *Correlator {
 	return &Correlator{window: window,
-		cache:      newLRUCache[uint32, ProcessNode](1000),
-		ipScoped:   newLRUCache[ipKey, ipRecord](5000),
-		ipFallback: newLRUCache[string, ipRecord](5000),
+		cache:            newLRUCache[uint32, ProcessNode](1000),
+		ipScoped:         newLRUCache[ipKey, ipRecord](5000),
+		ipFallback:       newLRUCache[string, ipRecord](5000),
+		recentPathWrites: newLRUCache[string, fileWriteRecord](2000),
+		recentIDWrites:   newLRUCache[trust.FileID, fileWriteRecord](2000),
 	}
 }
 
@@ -137,4 +148,37 @@ func normalizeIP(ip string) string {
 		return parsed.String()
 	}
 	return ip
+}
+
+// RecordFileWrite stores write event context by both path and FileID (if available)
+func (c *Correlator) RecordFileWrite(path string, id trust.FileID, pid uint32, comm string) {
+	rec := fileWriteRecord{
+		writtenAt:  time.Now(),
+		writerPID:  pid,
+		writerComm: comm,
+	}
+
+	if path != "" {
+		c.recentPathWrites.Add(path, rec)
+	}
+	if id.Dev != 0 || id.Ino != 0 {
+		c.recentIDWrites.Add(id, rec)
+	}
+}
+
+// GetRecentWrite queries recent write history by FileID first, then falls back to Path
+func (c *Correlator) GetRecentWrite(path string, id trust.FileID, within time.Duration) (fileWriteRecord, bool) {
+	if id.Dev != 0 || id.Ino != 0 {
+		if rec, ok := c.recentIDWrites.Get(id); ok && time.Since(rec.writtenAt) <= within {
+			return rec, true
+		}
+	}
+
+	if path != "" {
+		if rec, ok := c.recentPathWrites.Get(path); ok && time.Since(rec.writtenAt) <= within {
+			return rec, true
+		}
+	}
+
+	return fileWriteRecord{}, false
 }

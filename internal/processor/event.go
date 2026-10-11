@@ -281,6 +281,10 @@ func decodeOpen(r *Router, meta EventMeta, raw []byte) error {
 	case kebpf.EventMemfd:
 		r.engine.AnalyzeGeneric(pMeta, "MEMFD_CREATE", config.SeverityHigh, "")
 	case kebpf.EventSensitiveWrite:
+		if r.engine.correlator != nil {
+			fileID := trust.FileID{Dev: meta.ExeDev, Ino: meta.ExeIno}
+			r.engine.correlator.RecordFileWrite(pMeta.Filename, fileID, meta.PID, meta.Comm)
+		}
 		detail := fmt.Sprintf("open flags=0x%x (write intent on protected path)", meta.Ret)
 		r.engine.AnalyzeGeneric(pMeta, "SENSITIVE_WRITE", config.SeverityCritical, detail)
 	}

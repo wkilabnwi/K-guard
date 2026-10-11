@@ -16,6 +16,7 @@ import (
 	kebpf "k-guard/internal/ebpf"
 	"k-guard/internal/metrics"
 	"k-guard/internal/safety"
+	"k-guard/internal/trust"
 )
 
 // MockSink catches emitted alerts for inspection
@@ -1057,5 +1058,38 @@ func TestRouter_SendmsgEgress(t *testing.T) {
 	}
 	if alerts[0].DestIP != "8.8.8.8" || alerts[0].DestPort != 53 {
 		t.Errorf("unexpected sendmsg alert details: %+v", alerts[0])
+	}
+}
+
+func TestCorrelator_DropAndExec(t *testing.T) {
+	correlator := NewCorrelator(10 * time.Second)
+	fileID := trust.FileID{Dev: 2050, Ino: 998877}
+	filePath := "/tmp/malware_payload"
+
+	// Record file write intent (dual-keyed by path and inode)
+	correlator.RecordFileWrite(filePath, fileID, 1337, "python3")
+
+	// Direct FileID lookup (e.g. executed after rename)
+	rec, found := correlator.GetRecentWrite("", fileID, 5*time.Second)
+	if !found {
+		t.Fatalf("expected drop-and-exec write record to be found via FileID")
+	}
+	if rec.writerPID != 1337 || rec.writerComm != "python3" {
+		t.Errorf("unexpected write record content: %+v", rec)
+	}
+
+	// Path lookup fallback (e.g. executed after copy)
+	recPath, foundPath := correlator.GetRecentWrite(filePath, trust.FileID{}, 5*time.Second)
+	if !foundPath {
+		t.Fatalf("expected drop-and-exec write record to be found via Path fallback")
+	}
+	if recPath.writerPID != 1337 {
+		t.Errorf("unexpected path write record content: %+v", recPath)
+	}
+
+	// Verify expiration outside the time window
+	_, foundExpired := correlator.GetRecentWrite(filePath, fileID, 0*time.Second)
+	if foundExpired {
+		t.Errorf("expected write record to be expired outside the active window")
 	}
 }
