@@ -119,6 +119,7 @@ func (r *Router) initHandlers() {
 		kebpf.EventBranchMispredict: decodePmu,
 		kebpf.EventDnsAnswer:        decodeDnsAnswer,
 		kebpf.EventReverseShell:     decodeExec,
+		kebpf.EventRwxViolation:     decodeRWX,
 	}
 }
 
@@ -403,6 +404,17 @@ func decodeDnsAnswer(r *Router, meta EventMeta, raw []byte) error {
 		return nil
 	}
 	r.engine.RecordDNSAnswer(meta.CgroupID, ip, qname)
+	return nil
+}
+
+func decodeRWX(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFMprotectEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+
+	detail := fmt.Sprintf("W^X Policy Violation: executable & writable memory mapping requested (req_prot=0x%x, prot=0x%x)", evt.ReqProt, evt.Prot)
+	r.engine.AnalyzeGeneric(ProcessMeta{EventMeta: meta}, "RWX_MEM_VIOLATION", config.SeverityLow, detail)
 	return nil
 }
 

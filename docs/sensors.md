@@ -27,6 +27,7 @@ K-Guard attaches a mix of tracepoint sensors and, when the kernel allows it, BPF
 | `BPF_CMD_BLOCKED` | `lsm/bpf` | Self-protection: blocks unauthorized inspection/detaching of K-Guard eBPF maps and programs |
 | `BRANCH_MISPREDICT` | `perf_event` (`PERF_TYPE_HARDWARE`, `PERF_COUNT_HW_BRANCH_MISSES`) | Hardware PMU counter, not a syscall/LSM hook. One `perf_event` per possible CPU, sampled every 10k mispredicted branches |
 | `REVERSE_SHELL` | `sys_enter_dup2`, `sys_enter_dup3` + `lsm/bprm_check_security` | Pre-exec: detects socket redirection and drops execution (`-EPERM`) |
+| `RWX_MEM_VIOLATION` | `lsm/mmap_file` / `lsm/file_mprotect` | W^X policy enforcement: catches attempts to map or set memory pages as both writable and executable (`PROT_WRITE | PROT_EXEC`) |
 
 DNS traffic is captured separately via TC classifiers. See [Enrichment](enrichment.md#dns-interception--ip-to-domain-correlation).
 
@@ -43,6 +44,14 @@ K-Guard correlates file write intent (`SENSITIVE_WRITE` / `sys_enter_openat`) wi
 - **Dual-Keying**: Recent writes are cached in the userspace `Correlator` using both normalized canonical paths and filesystem identities (`FileID{Dev, Ino}`)[cite: 35].
 - **Anti-Evasion**: Dual-keying ensures correlation persists across payload copies, renames (`mv`), and symlink modifications.
 - **Correlation Window**: Executions occurring within 30 seconds of a recorded write trigger a `DROP_AND_EXEC` critical alert detailing the writing PID, parent executable name, and elapsed write time.
+
+## W^X (Write XOR Execute) Protection
+
+K-Guard enforces a Write XOR Execute security stance by hooking Linux Security Module (LSM) memory layout operations:
+
+- **Hooks**: Intercepts `mmap()` via `lsm/mmap_file` and `mprotect()` via `lsm/file_mprotect`.
+- **Logic**: Evaluates memory protection flags (`req_prot` and `prot`) for the bitwise presence of `PROT_WRITE (0x2)` AND `PROT_EXEC (0x4)`.
+- **Threat Neutralization**: Catches shellcode injection, JIT exploitation, and anonymous/file-backed executable memory page allocations before code execution occurs.
 
 ## Event filtering
 

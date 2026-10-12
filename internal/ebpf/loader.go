@@ -20,7 +20,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type dns_answer_event -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event -type ns_change_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type mprotect_event -type dns_answer_event -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event -type ns_change_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -203,6 +203,26 @@ func NewManager() (*Manager, error) {
 		} else {
 			m.links = append(m.links, l)
 			slog.Info("LSM bpf_cmd self-defense hook attached", "component", "ebpf")
+		}
+	}
+
+	if m.Objects.LsmMmapFile != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmMmapFile})
+		if aerr != nil {
+			slog.Warn("LSM mmap_file hook failed to attach", "component", "ebpf", "error", aerr)
+		} else {
+			m.links = append(m.links, l)
+			slog.Info("LSM mmap_file W^X hook attached", "component", "ebpf")
+		}
+	}
+
+	if m.Objects.LsmFileMprotect != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.LsmFileMprotect})
+		if aerr != nil {
+			slog.Warn("LSM file_mprotect hook failed to attach", "component", "ebpf", "error", aerr)
+		} else {
+			m.links = append(m.links, l)
+			slog.Info("LSM file_mprotect W^X hook attached", "component", "ebpf")
 		}
 	}
 

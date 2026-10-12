@@ -117,6 +117,13 @@ type BPFLpmPrefixKey struct {
 	Basename  [256]int8
 }
 
+type BPFMprotectEvent struct {
+	_       structs.HostLayout
+	Hdr     BPFEventHdr
+	ReqProt uint64
+	Prot    uint64
+}
+
 type BPFNsChangeEvent struct {
 	_      structs.HostLayout
 	Hdr    BPFEventHdr
@@ -190,7 +197,9 @@ const (
 	BPFProgKguardTaskFixSetuid     = "kguard_task_fix_setuid"
 	BPFProgLsmBpfCmd               = "lsm_bpf_cmd"
 	BPFProgLsmBprmCheck            = "lsm_bprm_check"
+	BPFProgLsmFileMprotect         = "lsm_file_mprotect"
 	BPFProgLsmFileOpen             = "lsm_file_open"
+	BPFProgLsmMmapFile             = "lsm_mmap_file"
 	BPFProgLsmPtraceAccessCheck    = "lsm_ptrace_access_check"
 	BPFProgLsmTaskKill             = "lsm_task_kill"
 	BPFProgOnBranchMispredict      = "on_branch_mispredict"
@@ -225,6 +234,7 @@ const (
 	BPFVarUnusedIouringEvent       = "unused_iouring_event"
 	BPFVarUnusedKmodEvent          = "unused_kmod_event"
 	BPFVarUnusedLpeEvent           = "unused_lpe_event"
+	BPFVarUnusedMprotectEvent      = "unused_mprotect_event"
 	BPFVarUnusedNsChangeEvent      = "unused_ns_change_event"
 	BPFVarUnusedOpenEvent          = "unused_open_event"
 	BPFVarUnusedPmuEvent           = "unused_pmu_event"
@@ -279,7 +289,9 @@ type BPFProgramSpecs struct {
 	KguardTaskFixSetuid  *ebpf.ProgramSpec `ebpf:"kguard_task_fix_setuid"`
 	LsmBpfCmd            *ebpf.ProgramSpec `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.ProgramSpec `ebpf:"lsm_bprm_check"`
+	LsmFileMprotect      *ebpf.ProgramSpec `ebpf:"lsm_file_mprotect"`
 	LsmFileOpen          *ebpf.ProgramSpec `ebpf:"lsm_file_open"`
+	LsmMmapFile          *ebpf.ProgramSpec `ebpf:"lsm_mmap_file"`
 	LsmPtraceAccessCheck *ebpf.ProgramSpec `ebpf:"lsm_ptrace_access_check"`
 	LsmTaskKill          *ebpf.ProgramSpec `ebpf:"lsm_task_kill"`
 	OnBranchMispredict   *ebpf.ProgramSpec `ebpf:"on_branch_mispredict"`
@@ -339,6 +351,7 @@ type BPFVariableSpecs struct {
 	UnusedIouringEvent       *ebpf.VariableSpec `ebpf:"unused_iouring_event"`
 	UnusedKmodEvent          *ebpf.VariableSpec `ebpf:"unused_kmod_event"`
 	UnusedLpeEvent           *ebpf.VariableSpec `ebpf:"unused_lpe_event"`
+	UnusedMprotectEvent      *ebpf.VariableSpec `ebpf:"unused_mprotect_event"`
 	UnusedNsChangeEvent      *ebpf.VariableSpec `ebpf:"unused_ns_change_event"`
 	UnusedOpenEvent          *ebpf.VariableSpec `ebpf:"unused_open_event"`
 	UnusedPmuEvent           *ebpf.VariableSpec `ebpf:"unused_pmu_event"`
@@ -413,6 +426,7 @@ type BPFVariables struct {
 	UnusedIouringEvent       *ebpf.Variable `ebpf:"unused_iouring_event"`
 	UnusedKmodEvent          *ebpf.Variable `ebpf:"unused_kmod_event"`
 	UnusedLpeEvent           *ebpf.Variable `ebpf:"unused_lpe_event"`
+	UnusedMprotectEvent      *ebpf.Variable `ebpf:"unused_mprotect_event"`
 	UnusedNsChangeEvent      *ebpf.Variable `ebpf:"unused_ns_change_event"`
 	UnusedOpenEvent          *ebpf.Variable `ebpf:"unused_open_event"`
 	UnusedPmuEvent           *ebpf.Variable `ebpf:"unused_pmu_event"`
@@ -429,7 +443,9 @@ type BPFPrograms struct {
 	KguardTaskFixSetuid  *ebpf.Program `ebpf:"kguard_task_fix_setuid"`
 	LsmBpfCmd            *ebpf.Program `ebpf:"lsm_bpf_cmd"`
 	LsmBprmCheck         *ebpf.Program `ebpf:"lsm_bprm_check"`
+	LsmFileMprotect      *ebpf.Program `ebpf:"lsm_file_mprotect"`
 	LsmFileOpen          *ebpf.Program `ebpf:"lsm_file_open"`
+	LsmMmapFile          *ebpf.Program `ebpf:"lsm_mmap_file"`
 	LsmPtraceAccessCheck *ebpf.Program `ebpf:"lsm_ptrace_access_check"`
 	LsmTaskKill          *ebpf.Program `ebpf:"lsm_task_kill"`
 	OnBranchMispredict   *ebpf.Program `ebpf:"on_branch_mispredict"`
@@ -463,7 +479,9 @@ func (p *BPFPrograms) Close() error {
 		p.KguardTaskFixSetuid,
 		p.LsmBpfCmd,
 		p.LsmBprmCheck,
+		p.LsmFileMprotect,
 		p.LsmFileOpen,
+		p.LsmMmapFile,
 		p.LsmPtraceAccessCheck,
 		p.LsmTaskKill,
 		p.OnBranchMispredict,

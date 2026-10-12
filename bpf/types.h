@@ -24,6 +24,7 @@
 #define EVT_NS_CHANGE 17
 #define EVT_DNS_ANSWER 18
 #define EVT_REVERSE_SHELL 19
+#define EVT_RWX_VIOLATION     20
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -130,6 +131,13 @@ struct dns_answer_event {
     char  qname[128];
 };
 
+struct mprotect_event {
+    struct event_hdr hdr;
+    __u64 req_prot;
+    __u64 prot;
+};
+
+struct mprotect_event *unused_mprotect_event __attribute__((unused));
 struct dns_answer_event *unused_dns_answer_event __attribute__((unused));
 struct event_hdr *unused_event_hdr __attribute__((unused));
 struct exec_event *unused_exec_event __attribute__((unused));

@@ -291,5 +291,46 @@ int BPF_PROG(kguard_task_alloc, struct task_struct *task, unsigned long clone_fl
     return 0;
 }
 
+// MMAP HELPERS AND HOOK
+
+#ifndef PROT_READ
+#define PROT_READ 0x1
+#endif
+#ifndef PROT_WRITE
+#define PROT_WRITE 0x2
+#endif
+#ifndef PROT_EXEC
+#define PROT_EXEC 0x4
+#endif
+
+static __always_inline void check_rwx_violation(unsigned long req_prot, unsigned long prot) {
+
+    if ((req_prot & PROT_WRITE) && (req_prot & PROT_EXEC)) {
+
+        struct mprotect_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+        if (!e) {
+            return;
+        }
+
+        fill_common(&e->hdr, EVT_RWX_VIOLATION);
+        e->req_prot = req_prot;
+        e->prot = prot;
+
+        bpf_ringbuf_submit(e, 0);
+    }
+}
+
+SEC("lsm/mmap_file")
+int BPF_PROG(lsm_mmap_file, struct file *file, unsigned long reqprot, unsigned long prot, unsigned long flags) {
+    check_rwx_violation(reqprot, prot);
+    return 0;
+}
+
+SEC("lsm/file_mprotect")
+int BPF_PROG(lsm_file_mprotect, struct vm_area_struct *vma, unsigned long reqprot, unsigned long prot) {
+    check_rwx_violation(reqprot, prot);
+    return 0;
+}
+
 
 #endif
