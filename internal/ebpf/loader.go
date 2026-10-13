@@ -20,7 +20,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type mprotect_event -type dns_answer_event -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event -type ns_change_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package ebpf -target amd64 -cc clang -cflags "-Wno-int-conversion -DKGUARD_HAVE_VMLINUX -I../../bpf/include" -type cap_event -type mprotect_event -type dns_answer_event -type pmu_event -type lpe_event -type iouring_event -type file_id -type event_hdr -type exec_event -type connect_event -type open_event -type ptrace_event -type kmod_event -type ns_change_event BPF ../../bpf/kguard.c -- -I../../bpf/include -I../../bpf -D__TARGET_ARCH_x86
 type Manager struct {
 	Objects BPFObjects
 	Reader  *ringbuf.Reader
@@ -52,6 +52,16 @@ func NewManager() (*Manager, error) {
 	m := &Manager{}
 	if err := LoadBPFObjects(&m.Objects, nil); err != nil {
 		return nil, fmt.Errorf("loading BPF objects: %w", err)
+	}
+
+	hostNS, err := getHostMountNSInode()
+	if err != nil {
+		m.Close()
+		return nil, fmt.Errorf("reading host mnt ns inode: %w", err)
+	}
+	if err := m.Objects.HostMntNsInum.Set(hostNS); err != nil {
+		m.Close()
+		return nil, fmt.Errorf("setting host_mnt_ns_inum: %w", err)
 	}
 
 	type tpSpec struct {
@@ -286,6 +296,18 @@ func NewManager() (*Manager, error) {
 		}
 	} else {
 		slog.Warn("KguardTaskFixSetuid object is nil in compiled BPF objects", "component", "ebpf")
+	}
+
+	if m.Objects.KguardCapable != nil {
+		l, aerr := link.AttachLSM(link.LSMOptions{Program: m.Objects.KguardCapable})
+		if aerr != nil {
+			slog.Warn("LSM capable hook failed to attach", "component", "ebpf", "error", aerr)
+		} else {
+			m.links = append(m.links, l)
+			slog.Info("LSM capable hook attached, container capability escalation monitoring is ACTIVE", "component", "ebpf")
+		}
+	} else {
+		slog.Warn("KguardCapable object is nil in compiled BPF objects", "component", "ebpf")
 	}
 
 	if err := m.Objects.SelfPid.Set(uint32(os.Getpid())); err != nil {
@@ -690,4 +712,12 @@ func (m *Manager) attachTCDNS() {
 		m.activeSensors = append(m.activeSensors, "tc_dns_classifier")
 		slog.Info("TC DNS classifier attached", "component", "ebpf", "active_filters", attachedCount)
 	}
+}
+
+func getHostMountNSInode() (uint32, error) {
+	var st unix.Stat_t
+	if err := unix.Stat("/proc/1/ns/mnt", &st); err != nil {
+		return 0, err
+	}
+	return uint32(st.Ino), nil
 }

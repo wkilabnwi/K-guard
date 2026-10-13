@@ -26,4 +26,5 @@ const (
 	EventDnsAnswer        = types.EventDnsAnswer
 	EventReverseShell     = types.EventReverseShell
 	EventRwxViolation     = types.EventRwxViolation
+	EventCapabilityChange = types.EventCapabilityChange
 )

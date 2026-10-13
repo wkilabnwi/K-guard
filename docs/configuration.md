@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md)
 
-K-Guard accepts **YAML** and **JSON** (auto-detected by extension, with a structural fallback). Configs reload on `SIGHUP` or via a 5-second poll loop. Files are unmarshaled into Go structs, Files are unmarshaled directly into Go structs, and CEL ASTs are pre-compiled and initialized once (`sync.Once`) up front so the engine stays format-agnostic and fast at runtime.
+K-Guard accepts **YAML** and **JSON** (auto-detected by extension, with a structural fallback). Configs reload on `SIGHUP` or via a 5-second poll loop. Files are unmarshaled into Go structs, and CEL ASTs are pre-compiled and initialized once (`sync.Once`) up front so the engine stays format-agnostic and fast at runtime.
 
 ## Full example
 

@@ -64,6 +64,7 @@ const (
 	EventDnsAnswer        EventType = 18
 	EventReverseShell     EventType = 19
 	EventRwxViolation     EventType = 20
+	EventCapabilityChange EventType = 21
 )
 
 func (t EventType) String() string {
@@ -108,6 +109,8 @@ func (t EventType) String() string {
 		return "REVERSE_SHELL"
 	case EventRwxViolation:
 		return "RWX_MEM_VIOLATION"
+	case EventCapabilityChange:
+		return "CAP_CHANGE"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", t)
 	}

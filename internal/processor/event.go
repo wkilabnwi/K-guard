@@ -120,6 +120,7 @@ func (r *Router) initHandlers() {
 		kebpf.EventDnsAnswer:        decodeDnsAnswer,
 		kebpf.EventReverseShell:     decodeExec,
 		kebpf.EventRwxViolation:     decodeRWX,
+		kebpf.EventCapabilityChange: decodeCapability,
 	}
 }
 
@@ -261,6 +262,10 @@ func decodeNsChange(r *Router, meta EventMeta, raw []byte) error {
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
 		return err
 	}
+	if meta.CgroupID != 0 {
+		_ = r.engine.ebpfMgr.AddContainerCgroup(meta.CgroupID)
+	}
+
 	r.engine.AnalyzeNsChange(ProcessMeta{EventMeta: meta}, evt.Op, evt.Flags, evt.Nstype)
 	return nil
 }
@@ -415,6 +420,26 @@ func decodeRWX(r *Router, meta EventMeta, raw []byte) error {
 
 	detail := fmt.Sprintf("W^X Policy Violation: executable & writable memory mapping requested (req_prot=0x%x, prot=0x%x)", evt.ReqProt, evt.Prot)
 	r.engine.AnalyzeGeneric(ProcessMeta{EventMeta: meta}, "RWX_MEM_VIOLATION", config.SeverityLow, detail)
+	return nil
+}
+
+func decodeCapability(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFCapEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+
+	capName := "CAP_UNKNOWN"
+	switch evt.Cap {
+	case 21:
+		capName = "CAP_SYS_ADMIN"
+
+	case 16:
+		capName = "CAP_SYS_MODULE"
+	}
+
+	detail := fmt.Sprintf("Container capability escalation attempt: process exercised %s inside tracked container cgroup", capName)
+	r.engine.AnalyzeGeneric(ProcessMeta{EventMeta: meta}, "CAPABILITY_ESCALATION", config.SeverityMedium, detail)
 	return nil
 }
 

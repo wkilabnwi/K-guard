@@ -28,6 +28,7 @@ K-Guard attaches a mix of tracepoint sensors and, when the kernel allows it, BPF
 | `BRANCH_MISPREDICT` | `perf_event` (`PERF_TYPE_HARDWARE`, `PERF_COUNT_HW_BRANCH_MISSES`) | Hardware PMU counter, not a syscall/LSM hook. One `perf_event` per possible CPU, sampled every 10k mispredicted branches |
 | `REVERSE_SHELL` | `sys_enter_dup2`, `sys_enter_dup3` + `lsm/bprm_check_security` | Pre-exec: detects socket redirection and drops execution (`-EPERM`) |
 | `RWX_MEM_VIOLATION` | `lsm/mmap_file` / `lsm/file_mprotect` | W^X policy enforcement: catches attempts to map or set memory pages as both writable and executable (`PROT_WRITE | PROT_EXEC`) |
+| `CAPABILITY_ESCALATION` | `lsm/capable` | Pre-execution monitoring of critical capability checks (`CAP_SYS_ADMIN`, `CAP_SYS_MODULE`) inside tracked container cgroups |
 
 DNS traffic is captured separately via TC classifiers. See [Enrichment](enrichment.md#dns-interception--ip-to-domain-correlation).
 
@@ -37,11 +38,19 @@ eBPF tracks context across child forks via `BPF_MAP_TYPE_TASK_STORAGE` attached 
 
 A userspace LRU cache maps `pid` → `ppid` to reconstruct and log the process execution tree when an alert fires.
 
+## Capability Escalation Monitoring (`lsm/capable`)
+
+K-Guard intercepts privileged kernel capability queries via the `lsm/capable` LSM hook.
+
+- **Capabilities Monitored**: Restricts observation to high-risk administrative capabilities including `CAP_SYS_ADMIN` (21) and `CAP_SYS_MODULE` (16).
+- **Container Scope**: Filters events against the `container_cgroups` BPF map so host-level administrative commands are ignored.
+- **Noise Suppression**: Dynamically filters runtime initialization overhead (`runc`, `nsenter`, `containerd-shim`) by comparing the task's mount namespace inode (`ns.inum`) against `host_mnt_ns_inum` (populated at startup from `/proc/1/ns/mnt`). Capability checks executed within the host mount namespace are suppressed, ensuring alerts fire only for actual workloads inside container namespaces.
+
 ## Drop-and-Exec Correlation
 
 K-Guard correlates file write intent (`SENSITIVE_WRITE` / `sys_enter_openat`) with subsequent binary executions (`EXEC`).
 
-- **Dual-Keying**: Recent writes are cached in the userspace `Correlator` using both normalized canonical paths and filesystem identities (`FileID{Dev, Ino}`)[cite: 35].
+- **Dual-Keying**: Recent writes are cached in the userspace `Correlator` using both normalized canonical paths and filesystem identities (`FileID{Dev, Ino}`).
 - **Anti-Evasion**: Dual-keying ensures correlation persists across payload copies, renames (`mv`), and symlink modifications.
 - **Correlation Window**: Executions occurring within 30 seconds of a recorded write trigger a `DROP_AND_EXEC` critical alert detailing the writing PID, parent executable name, and elapsed write time.
 

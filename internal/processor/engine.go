@@ -219,11 +219,11 @@ func (e *Engine) AnalyzeExec(meta ProcessMeta, blocked bool) {
 // Helper: Handle fileless execution events
 func (e *Engine) handleFilelessExec(meta ProcessMeta) {
 	filelessDetail := "Fileless execution detected"
-	sev := config.SeverityCritical
+	sev := config.SeverityMedium
 
 	e.metrics.IncRuleHit("FilelessExecution", string(sev), string(config.ActionKill))
 
-	a := meta.ToAlert("FILELESS_EXEC", sev, config.ActionKill, filelessDetail)
+	a := meta.ToAlert("FILELESS_EXEC", sev, config.ActionAlert, filelessDetail)
 	e.emit(a)
 }
 

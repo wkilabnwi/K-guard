@@ -13,6 +13,14 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type BPFCapEvent struct {
+	_           structs.HostLayout
+	Hdr         BPFEventHdr
+	Cap         uint32
+	IsContainer uint8
+	_           [3]byte
+}
+
 type BPFConnectEvent struct {
 	_        structs.HostLayout
 	Hdr      BPFEventHdr
@@ -191,6 +199,7 @@ const (
 	BPFMapScratchMap               = "scratch_map"
 	BPFMapSensitiveWritePaths      = "sensitive_write_paths"
 	BPFMapSuspiciousPaths          = "suspicious_paths"
+	BPFProgKguardCapable           = "kguard_capable"
 	BPFProgKguardKernelLoadData    = "kguard_kernel_load_data"
 	BPFProgKguardKernelReadFile    = "kguard_kernel_read_file"
 	BPFProgKguardTaskAlloc         = "kguard_task_alloc"
@@ -224,9 +233,11 @@ const (
 	BPFProgTpSetuid                = "tp_setuid"
 	BPFProgTpUnshare               = "tp_unshare"
 	BPFVarEnforcementEnabled       = "enforcement_enabled"
+	BPFVarHostMntNsInum            = "host_mnt_ns_inum"
 	BPFVarKmodEnforcementEnabled   = "kmod_enforcement_enabled"
 	BPFVarPtraceEnforcementEnabled = "ptrace_enforcement_enabled"
 	BPFVarSelfPid                  = "self_pid"
+	BPFVarUnusedCapEvent           = "unused_cap_event"
 	BPFVarUnusedConnectEvent       = "unused_connect_event"
 	BPFVarUnusedDnsAnswerEvent     = "unused_dns_answer_event"
 	BPFVarUnusedEventHdr           = "unused_event_hdr"
@@ -283,6 +294,7 @@ type BPFSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFProgramSpecs struct {
+	KguardCapable        *ebpf.ProgramSpec `ebpf:"kguard_capable"`
 	KguardKernelLoadData *ebpf.ProgramSpec `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.ProgramSpec `ebpf:"kguard_kernel_read_file"`
 	KguardTaskAlloc      *ebpf.ProgramSpec `ebpf:"kguard_task_alloc"`
@@ -341,9 +353,11 @@ type BPFMapSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type BPFVariableSpecs struct {
 	EnforcementEnabled       *ebpf.VariableSpec `ebpf:"enforcement_enabled"`
+	HostMntNsInum            *ebpf.VariableSpec `ebpf:"host_mnt_ns_inum"`
 	KmodEnforcementEnabled   *ebpf.VariableSpec `ebpf:"kmod_enforcement_enabled"`
 	PtraceEnforcementEnabled *ebpf.VariableSpec `ebpf:"ptrace_enforcement_enabled"`
 	SelfPid                  *ebpf.VariableSpec `ebpf:"self_pid"`
+	UnusedCapEvent           *ebpf.VariableSpec `ebpf:"unused_cap_event"`
 	UnusedConnectEvent       *ebpf.VariableSpec `ebpf:"unused_connect_event"`
 	UnusedDnsAnswerEvent     *ebpf.VariableSpec `ebpf:"unused_dns_answer_event"`
 	UnusedEventHdr           *ebpf.VariableSpec `ebpf:"unused_event_hdr"`
@@ -416,9 +430,11 @@ func (m *BPFMaps) Close() error {
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFVariables struct {
 	EnforcementEnabled       *ebpf.Variable `ebpf:"enforcement_enabled"`
+	HostMntNsInum            *ebpf.Variable `ebpf:"host_mnt_ns_inum"`
 	KmodEnforcementEnabled   *ebpf.Variable `ebpf:"kmod_enforcement_enabled"`
 	PtraceEnforcementEnabled *ebpf.Variable `ebpf:"ptrace_enforcement_enabled"`
 	SelfPid                  *ebpf.Variable `ebpf:"self_pid"`
+	UnusedCapEvent           *ebpf.Variable `ebpf:"unused_cap_event"`
 	UnusedConnectEvent       *ebpf.Variable `ebpf:"unused_connect_event"`
 	UnusedDnsAnswerEvent     *ebpf.Variable `ebpf:"unused_dns_answer_event"`
 	UnusedEventHdr           *ebpf.Variable `ebpf:"unused_event_hdr"`
@@ -437,6 +453,7 @@ type BPFVariables struct {
 //
 // It can be passed to LoadBPFObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BPFPrograms struct {
+	KguardCapable        *ebpf.Program `ebpf:"kguard_capable"`
 	KguardKernelLoadData *ebpf.Program `ebpf:"kguard_kernel_load_data"`
 	KguardKernelReadFile *ebpf.Program `ebpf:"kguard_kernel_read_file"`
 	KguardTaskAlloc      *ebpf.Program `ebpf:"kguard_task_alloc"`
@@ -473,6 +490,7 @@ type BPFPrograms struct {
 
 func (p *BPFPrograms) Close() error {
 	return _BPFClose(
+		p.KguardCapable,
 		p.KguardKernelLoadData,
 		p.KguardKernelReadFile,
 		p.KguardTaskAlloc,

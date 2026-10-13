@@ -25,6 +25,7 @@
 #define EVT_DNS_ANSWER 18
 #define EVT_REVERSE_SHELL 19
 #define EVT_RWX_VIOLATION     20
+#define EVT_CAPABILITY_CHANGE 21
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -137,6 +138,13 @@ struct mprotect_event {
     __u64 prot;
 };
 
+struct cap_event {
+    struct event_hdr hdr;
+    __u32 cap;        // Capability number being checked
+    __u8  is_container;
+};
+
+struct cap_event *unused_cap_event __attribute__((unused));
 struct mprotect_event *unused_mprotect_event __attribute__((unused));
 struct dns_answer_event *unused_dns_answer_event __attribute__((unused));
 struct event_hdr *unused_event_hdr __attribute__((unused));
@@ -181,6 +189,8 @@ struct lpm_prefix_key {
     __u32 prefixlen;          
     char  basename[PATH_BUF_SIZE];        
 };
+
+
 
 
 #endif

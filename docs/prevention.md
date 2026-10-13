@@ -14,6 +14,7 @@
 - **Ptrace prevention**: with `ptrace_enforcement_enabled: true`, `lsm/ptrace_access_check` blocks unauthorized injection unless the caller matches `allowed_ptrace_attaches`.
 - **Kernel module load prevention**: intercepts module loads and blocks them when they originate from tracked container cgroups (the `container_cgroups` BPF map).
 - **Privilege escalation prevention**: `lsm/task_fix_setuid` blocks a process from gaining UID 0 (`-EPERM`) unless it exec'd a setuid-root binary first.
+- **Capability escalation prevention**: `lsm/capable` monitors critical privilege checks (`CAP_SYS_ADMIN`, `CAP_SYS_MODULE`) exercised inside tracked container cgroups, ignoring setup-phase checks in the host mount namespace.
 - **Reverse-shell prevention**: `sys_enter_dup2`/`dup3` watch fd cloning. If an active network socket is duplicated onto stdio (`0`, `1`, `2`), the state is tracked in BPF task storage across `fork()`. When `lsm/bprm_check_security` fires, shell execution is blocked (`-EPERM`).
 - **W^X memory protection**: `lsm/mmap_file` and `lsm/file_mprotect` inspect memory allocations and flag/block pages requesting simultaneous write and execute permissions (`PROT_WRITE | PROT_EXEC`).
 

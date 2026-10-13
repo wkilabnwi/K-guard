@@ -90,7 +90,7 @@ int BPF_PROG(lsm_bprm_check, struct linux_binprm *bprm) {
     // -
 
     if (check_fileless(bprm, path, truncated)) {
-        return -1;
+        return 0;
     }
 
     __u8 *blocked = bpf_map_lookup_elem(&blocked_paths, path);
@@ -329,6 +329,53 @@ int BPF_PROG(lsm_mmap_file, struct file *file, unsigned long reqprot, unsigned l
 SEC("lsm/file_mprotect")
 int BPF_PROG(lsm_file_mprotect, struct vm_area_struct *vma, unsigned long reqprot, unsigned long prot) {
     check_rwx_violation(reqprot, prot);
+    return 0;
+}
+
+// CAPABLE HELPERS AND HOOK
+
+#ifndef CAP_SYS_ADMIN
+#define CAP_SYS_ADMIN 21
+#endif
+#ifndef CAP_SYS_MODULE
+#define CAP_SYS_MODULE 16
+#endif
+
+volatile __u32 host_mnt_ns_inum = 0;
+
+SEC("lsm/capable")
+int BPF_PROG(kguard_capable, const struct cred *cred, struct user_namespace *tNs, int cap, unsigned int opts) {
+    if (cap != CAP_SYS_ADMIN && cap != CAP_SYS_MODULE) {
+        return 0;
+    }
+
+    __u64 cgroup_id = bpf_get_current_cgroup_id();
+    __u8 *is_container = bpf_map_lookup_elem(&container_cgroups, &cgroup_id);
+    if (!is_container || *is_container != 1) {
+        return 0;
+    }
+
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    if (!task || !task->nsproxy || !task->nsproxy->mnt_ns) {
+        return 0;
+    }
+
+    // Skip runtime setup still in the host mount namespace
+    __u32 cur_inum = BPF_CORE_READ(task, nsproxy, mnt_ns, ns.inum);
+    if (cur_inum == host_mnt_ns_inum) {
+        return 0;
+    }
+
+    struct cap_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) {
+        return 0;
+    }
+
+    fill_common(&e->hdr, EVT_CAPABILITY_CHANGE);
+    e->cap = cap;
+    e->is_container = 1;
+
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }
 
