@@ -29,6 +29,7 @@ K-Guard attaches a mix of tracepoint sensors and, when the kernel allows it, BPF
 | `REVERSE_SHELL` | `sys_enter_dup2`, `sys_enter_dup3` + `lsm/bprm_check_security` | Pre-exec: detects socket redirection and drops execution (`-EPERM`) |
 | `RWX_MEM_VIOLATION` | `lsm/mmap_file` / `lsm/file_mprotect` | W^X policy enforcement: catches attempts to map or set memory pages as both writable and executable (`PROT_WRITE | PROT_EXEC`) |
 | `CAPABILITY_ESCALATION` | `lsm/capable` | Pre-execution monitoring of critical capability checks (`CAP_SYS_ADMIN`, `CAP_SYS_MODULE`) inside tracked container cgroups |
+| `BPF_PROG_LOAD` | `lsm/bpf` | Intercepts `BPF_PROG_LOAD` syscalls to alert on rogue or unauthorized eBPF program loads originating from non-agent processes |
 
 DNS traffic is captured separately via TC classifiers. See [Enrichment](enrichment.md#dns-interception--ip-to-domain-correlation).
 

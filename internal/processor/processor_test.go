@@ -1093,3 +1093,90 @@ func TestCorrelator_DropAndExec(t *testing.T) {
 		t.Errorf("expected write record to be expired outside the active window")
 	}
 }
+
+func TestRouter_BpfProgLoadEvent(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr, nil)
+
+	hdr := kebpf.BPFEventHdr{
+		EventType: uint32(kebpf.EventBpfProgLoad),
+		Pid:       9194,
+		Ppid:      9193,
+		Uid:       0,
+		Gid:       0,
+		CgroupId:  1,
+	}
+	copyInt8(hdr.Comm[:], "bpftrace")
+
+	evt := kebpf.BPFBpfProgLoadEvent{
+		Hdr:        hdr,
+		ProgType:   1, // BPF_PROG_TYPE_KPROBE
+		AttachType: 0,
+	}
+	copyInt8(evt.ProgName[:], "unnamed")
+
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, evt); err != nil {
+		t.Fatalf("failed to pack binary event: %v", err)
+	}
+
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected router to process 1 BPF_PROG_LOAD alert, got %d", len(alerts))
+	}
+
+	a := alerts[0]
+	if a.EventType != "BPF_PROG_LOAD" {
+		t.Errorf("expected EventType 'BPF_PROG_LOAD', got %q", a.EventType)
+	}
+	if a.Severity != string(config.SeverityHigh) {
+		t.Errorf("expected severity HIGH, got %q", a.Severity)
+	}
+	if a.Comm != "bpftrace" {
+		t.Errorf("expected comm 'bpftrace', got %q", a.Comm)
+	}
+	if !strings.Contains(a.Detail, "External eBPF program load detected") {
+		t.Errorf("expected detail to describe external eBPF program load, got %q", a.Detail)
+	}
+}
+
+func TestRouter_NetlinkEvent(t *testing.T) {
+	eng, sink, cfgMgr := setupTestEngine(t)
+	m := metrics.NewRegistry()
+	router := NewRouter(eng, m, cfgMgr, nil)
+
+	hdr := kebpf.BPFEventHdr{
+		EventType: uint32(kebpf.EventSendto),
+		Pid:       12304,
+		Ppid:      1,
+		Uid:       0,
+		Gid:       0,
+		CgroupId:  1,
+	}
+	copyInt8(hdr.Comm[:], "tcpdump")
+
+	netlinkEvt := kebpf.BPFConnectEvent{
+		Hdr:    hdr,
+		Family: 16,
+		Dport:  0,
+	}
+
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, netlinkEvt); err != nil {
+		t.Fatalf("failed to pack binary event: %v", err)
+	}
+
+	router.ProcessRawRecord(buf.Bytes())
+
+	alerts := waitForAlerts(sink, 1)
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for AF_NETLINK event, got %d", len(alerts))
+	}
+
+	if !strings.HasPrefix(alerts[0].DestIP, "netlink:") {
+		t.Errorf("expected netlink address string, got %q", alerts[0].DestIP)
+	}
+}

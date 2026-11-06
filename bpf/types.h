@@ -26,6 +26,7 @@
 #define EVT_REVERSE_SHELL 19
 #define EVT_RWX_VIOLATION     20
 #define EVT_CAPABILITY_CHANGE 21
+#define EVT_BPF_PROG_LOAD     22
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -144,6 +145,15 @@ struct cap_event {
     __u8  is_container;
 };
 
+struct bpf_prog_load_event {
+    struct event_hdr hdr;
+    __u32 prog_type;
+    __u32 attach_type;
+    char  prog_name[16];
+};
+
+
+struct bpf_prog_load_event *unused_bpf_prog_load_event __attribute__((unused));
 struct cap_event *unused_cap_event __attribute__((unused));
 struct mprotect_event *unused_mprotect_event __attribute__((unused));
 struct dns_answer_event *unused_dns_answer_event __attribute__((unused));

@@ -13,6 +13,14 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type BPFBpfProgLoadEvent struct {
+	_          structs.HostLayout
+	Hdr        BPFEventHdr
+	ProgType   uint32
+	AttachType uint32
+	ProgName   [16]int8
+}
+
 type BPFCapEvent struct {
 	_           structs.HostLayout
 	Hdr         BPFEventHdr
@@ -237,6 +245,7 @@ const (
 	BPFVarKmodEnforcementEnabled   = "kmod_enforcement_enabled"
 	BPFVarPtraceEnforcementEnabled = "ptrace_enforcement_enabled"
 	BPFVarSelfPid                  = "self_pid"
+	BPFVarUnusedBpfProgLoadEvent   = "unused_bpf_prog_load_event"
 	BPFVarUnusedCapEvent           = "unused_cap_event"
 	BPFVarUnusedConnectEvent       = "unused_connect_event"
 	BPFVarUnusedDnsAnswerEvent     = "unused_dns_answer_event"
@@ -357,6 +366,7 @@ type BPFVariableSpecs struct {
 	KmodEnforcementEnabled   *ebpf.VariableSpec `ebpf:"kmod_enforcement_enabled"`
 	PtraceEnforcementEnabled *ebpf.VariableSpec `ebpf:"ptrace_enforcement_enabled"`
 	SelfPid                  *ebpf.VariableSpec `ebpf:"self_pid"`
+	UnusedBpfProgLoadEvent   *ebpf.VariableSpec `ebpf:"unused_bpf_prog_load_event"`
 	UnusedCapEvent           *ebpf.VariableSpec `ebpf:"unused_cap_event"`
 	UnusedConnectEvent       *ebpf.VariableSpec `ebpf:"unused_connect_event"`
 	UnusedDnsAnswerEvent     *ebpf.VariableSpec `ebpf:"unused_dns_answer_event"`
@@ -434,6 +444,7 @@ type BPFVariables struct {
 	KmodEnforcementEnabled   *ebpf.Variable `ebpf:"kmod_enforcement_enabled"`
 	PtraceEnforcementEnabled *ebpf.Variable `ebpf:"ptrace_enforcement_enabled"`
 	SelfPid                  *ebpf.Variable `ebpf:"self_pid"`
+	UnusedBpfProgLoadEvent   *ebpf.Variable `ebpf:"unused_bpf_prog_load_event"`
 	UnusedCapEvent           *ebpf.Variable `ebpf:"unused_cap_event"`
 	UnusedConnectEvent       *ebpf.Variable `ebpf:"unused_connect_event"`
 	UnusedDnsAnswerEvent     *ebpf.Variable `ebpf:"unused_dns_answer_event"`

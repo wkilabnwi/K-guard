@@ -27,4 +27,5 @@ const (
 	EventReverseShell     = types.EventReverseShell
 	EventRwxViolation     = types.EventRwxViolation
 	EventCapabilityChange = types.EventCapabilityChange
+	EventBpfProgLoad      = types.EventBpfProgLoad
 )

@@ -90,7 +90,7 @@ Rule fields are documented in [Writing rules](rules.md).
 
 ## Deduplication
 
-Duplicate alerts for the same `(rule, pid)`, `(connect/sendto, pid, dest_ip)`, or `(event_type, pid)` (for generic sensors) within `dedup_window_seconds` are suppressed after the first. Dedup applies to alerts only; the [audit log](audit-log.md) is never deduplicated.
+Duplicate alerts for the same `(rule, pid)`, `(connect/sendto, pid, dest_ip)`, or `(event_type, pid)` (e.g. for `BPF_PROG_LOAD` or generic sensors) within `dedup_window_seconds` are suppressed after the first. Dedup applies to alerts only; the [audit log](audit-log.md) is never deduplicated.
 
 ## Validation
 

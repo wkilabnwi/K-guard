@@ -65,6 +65,7 @@ const (
 	EventReverseShell     EventType = 19
 	EventRwxViolation     EventType = 20
 	EventCapabilityChange EventType = 21
+	EventBpfProgLoad      EventType = 22
 )
 
 func (t EventType) String() string {
@@ -111,6 +112,8 @@ func (t EventType) String() string {
 		return "RWX_MEM_VIOLATION"
 	case EventCapabilityChange:
 		return "CAP_CHANGE"
+	case EventBpfProgLoad:
+		return "BPF_PROG_LOAD"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", t)
 	}

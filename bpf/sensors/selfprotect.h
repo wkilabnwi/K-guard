@@ -31,6 +31,27 @@ struct {
 SEC("lsm/bpf")
 int BPF_PROG(lsm_bpf_cmd, int cmd, union bpf_attr *attr, unsigned int size) {
 
+    if (cmd == BPF_PROG_LOAD) {
+        if (self_pid != 0) {
+            u64 pid_tgid = bpf_get_current_pid_tgid();
+            u32 caller_pid = (u32)(pid_tgid >> 32);
+
+            if (caller_pid != self_pid && caller_pid != 1) {
+                struct bpf_prog_load_event *evt = bpf_ringbuf_reserve(&rb, sizeof(*evt), 0);
+                if (evt) {
+                    fill_common(&evt->hdr, EVT_BPF_PROG_LOAD);
+                    
+                    // Extract BPF attr metadata
+                    evt->prog_type = BPF_CORE_READ(attr, prog_type);
+                    evt->attach_type = BPF_CORE_READ(attr, expected_attach_type);
+                    bpf_probe_read_kernel_str(evt->prog_name, sizeof(evt->prog_name), &attr->prog_name);
+
+                    bpf_ringbuf_submit(evt, 0);
+                }
+            }
+        }
+    }
+
     // Filter relevant commands
     switch (cmd) {
     case BPF_LINK_DETACH:

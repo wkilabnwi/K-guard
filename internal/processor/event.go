@@ -121,6 +121,7 @@ func (r *Router) initHandlers() {
 		kebpf.EventReverseShell:     decodeExec,
 		kebpf.EventRwxViolation:     decodeRWX,
 		kebpf.EventCapabilityChange: decodeCapability,
+		kebpf.EventBpfProgLoad:      decodeBpfProgLoad,
 	}
 }
 
@@ -248,6 +249,9 @@ func decodeNetworkEgress(r *Router, meta EventMeta, raw []byte) error {
 			return nil
 		}
 		destIP = "[" + ip.String() + "]"
+	case 16:
+		destIP = fmt.Sprintf("netlink:proto=%d", evt.Dport)
+		destPort = 0
 	default:
 		destIP = fmt.Sprintf("(unknown address family %d)", evt.Family)
 	}
@@ -440,6 +444,24 @@ func decodeCapability(r *Router, meta EventMeta, raw []byte) error {
 
 	detail := fmt.Sprintf("Container capability escalation attempt: process exercised %s inside tracked container cgroup", capName)
 	r.engine.AnalyzeGeneric(ProcessMeta{EventMeta: meta}, "CAPABILITY_ESCALATION", config.SeverityMedium, detail)
+	return nil
+}
+
+func decodeBpfProgLoad(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFBpfProgLoadEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+
+	progName := int8ToString(evt.ProgName[:])
+	if progName == "" {
+		progName = "unnamed"
+	}
+
+	detail := fmt.Sprintf("External eBPF program load detected: name=%q, prog_type=%d, attach_type=%d", progName, evt.ProgType, evt.AttachType)
+
+	pMeta := ProcessMeta{EventMeta: meta}
+	r.engine.AnalyzeGeneric(pMeta, "BPF_PROG_LOAD", config.SeverityHigh, detail)
 	return nil
 }
 
