@@ -66,6 +66,8 @@ const (
 	EventRwxViolation     EventType = 20
 	EventCapabilityChange EventType = 21
 	EventBpfProgLoad      EventType = 22
+	EventProcessVmRead    EventType = 23
+	EventProcessVmWrite   EventType = 24
 )
 
 func (t EventType) String() string {
@@ -114,6 +116,10 @@ func (t EventType) String() string {
 		return "CAP_CHANGE"
 	case EventBpfProgLoad:
 		return "BPF_PROG_LOAD"
+	case EventProcessVmRead:
+		return "PROCESS_VM_READ"
+	case EventProcessVmWrite:
+		return "PROCESS_VM_WRITE"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", t)
 	}

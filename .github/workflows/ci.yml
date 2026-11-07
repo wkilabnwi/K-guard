@@ -30,7 +30,8 @@ jobs:
       - name: Verify eBPF Code Generation
         run: |
           go generate ./...
-          git diff --exit-code || (echo "eBPF generated files are out of sync with bpf/*.c! Run 'go generate ./...' locally." && exit 1)
+          # Only check for diffs in Go generated files, ignore binary .o compiled differences
+          git diff --exit-code -- ':!*.o' || (echo "eBPF generated Go files are out of sync! Run 'go generate ./...' locally." && exit 1)
 
   unit-tests:
     name: Unit Tests (Go ${{ matrix.go-version }})
@@ -59,7 +60,6 @@ jobs:
           go run main.go -convert-sigma tests/test_web_shell.yml > /dev/null
           echo "Sigma transpiler validated successfully."
 
-
   ebpf-integration:
     name: eBPF Kernel Integration Tests
     runs-on: ubuntu-latest
@@ -74,6 +74,11 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
+
+      - name: Install LLVM & Clang (Required for Integration Tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev linux-headers-generic
 
       - name: Check BTF Availability
         run: |
@@ -99,6 +104,14 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
+
+      - name: Install LLVM & Clang for Release Codegen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev linux-headers-generic
+
+      - name: Regenerate eBPF Objects
+        run: go generate ./...
 
       - name: Build Binaries (amd64 & arm64)
         run: |

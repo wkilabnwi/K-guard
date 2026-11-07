@@ -122,6 +122,8 @@ func (r *Router) initHandlers() {
 		kebpf.EventRwxViolation:     decodeRWX,
 		kebpf.EventCapabilityChange: decodeCapability,
 		kebpf.EventBpfProgLoad:      decodeBpfProgLoad,
+		kebpf.EventProcessVmRead:    decodeVmReadWrite,
+		kebpf.EventProcessVmWrite:   decodeVmReadWrite,
 	}
 }
 
@@ -462,6 +464,28 @@ func decodeBpfProgLoad(r *Router, meta EventMeta, raw []byte) error {
 
 	pMeta := ProcessMeta{EventMeta: meta}
 	r.engine.AnalyzeGeneric(pMeta, "BPF_PROG_LOAD", config.SeverityHigh, detail)
+	return nil
+}
+
+func decodeVmReadWrite(r *Router, meta EventMeta, raw []byte) error {
+	var evt kebpf.BPFVmReadWriteEvent
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &evt); err != nil {
+		return err
+	}
+
+	targetComm := int8ToString(evt.TargetComm[:])
+	if targetComm == "" {
+		targetComm = "UNKNOWN"
+	}
+
+	evtType := meta.EventType.String()
+	sev := config.SeverityMedium
+
+	detail := fmt.Sprintf("Cross-process memory access (%s): targeting PID %d (%s) across %d segment(s)",
+		evtType, evt.TargetPid, targetComm, evt.NrSegs)
+
+	pMeta := ProcessMeta{EventMeta: meta}
+	r.engine.AnalyzeGeneric(pMeta, evtType, sev, detail)
 	return nil
 }
 

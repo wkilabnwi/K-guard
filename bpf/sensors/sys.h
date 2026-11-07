@@ -103,4 +103,61 @@ int tp_setns(struct syscall_setns_args *ctx) {
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
+
+// VM write and read sensors
+
+struct syscall_vm_rw_args {
+    unsigned long long common_tp_fields;
+    int syscall_nr;                     
+    int __pad;                          
+    pid_t pid;                          
+    const void *lvec;                   
+    unsigned long liovcnt;               
+    const void *rvec;                    
+    unsigned long riovcnt;               
+    unsigned long flags;                 
+};
+
+static __always_inline void emit_vm_rw_event(struct syscall_vm_rw_args *ctx, __u32 evt_type) {
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 caller_pid = (__u32)(pid_tgid >> 32);
+    __u32 target_pid = (__u32)ctx->pid;
+
+    // ignore self-memory access operations
+    if (caller_pid == target_pid || target_pid == 0) {
+        return;
+    }
+
+    struct vm_read_write_event *e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+    if (!e) return;
+
+    fill_common(&e->hdr, evt_type);
+    e->target_pid = target_pid;
+    e->nr_segs = ctx->riovcnt;
+    e->len = ctx->liovcnt;
+
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
+    struct task_struct *target_task = NULL;
+
+    // Optional target comm resolution via task inspection
+    bpf_probe_read_kernel(&target_task, sizeof(target_task), &task);
+    if (target_task) {
+        BPF_CORE_READ_STR_INTO(&e->target_comm, target_task, comm);
+    }
+
+    bpf_ringbuf_submit(e, 0);
+}
+
+SEC("tracepoint/syscalls/sys_enter_process_vm_readv")
+int tp_process_vm_readv(struct syscall_vm_rw_args *ctx) {
+    emit_vm_rw_event(ctx, EVT_PROCESS_VM_READ);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_process_vm_writev")
+int tp_process_vm_writev(struct syscall_vm_rw_args *ctx) {
+    emit_vm_rw_event(ctx, EVT_PROCESS_VM_WRITE);
+    return 0;
+}
+
 #endif

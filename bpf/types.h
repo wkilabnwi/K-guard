@@ -27,6 +27,8 @@
 #define EVT_RWX_VIOLATION     20
 #define EVT_CAPABILITY_CHANGE 21
 #define EVT_BPF_PROG_LOAD     22
+#define EVT_PROCESS_VM_READ   23
+#define EVT_PROCESS_VM_WRITE  24
 
 #define O_ACCMODE_MASK 0x0003
 #define O_WRONLY_ 0x0001
@@ -152,7 +154,16 @@ struct bpf_prog_load_event {
     char  prog_name[16];
 };
 
+struct vm_read_write_event {
+    struct event_hdr hdr;
+    __u32 target_pid;
+    __u64 nr_segs;
+    __u64 len;
+    char  target_comm[16];
+};
 
+
+struct vm_read_write_event *unused_vm_read_write_event __attribute__((unused));
 struct bpf_prog_load_event *unused_bpf_prog_load_event __attribute__((unused));
 struct cap_event *unused_cap_event __attribute__((unused));
 struct mprotect_event *unused_mprotect_event __attribute__((unused));

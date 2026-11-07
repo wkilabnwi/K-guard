@@ -30,6 +30,8 @@ K-Guard attaches a mix of tracepoint sensors and, when the kernel allows it, BPF
 | `RWX_MEM_VIOLATION` | `lsm/mmap_file` / `lsm/file_mprotect` | W^X policy enforcement: catches attempts to map or set memory pages as both writable and executable (`PROT_WRITE | PROT_EXEC`) |
 | `CAPABILITY_ESCALATION` | `lsm/capable` | Pre-execution monitoring of critical capability checks (`CAP_SYS_ADMIN`, `CAP_SYS_MODULE`) inside tracked container cgroups |
 | `BPF_PROG_LOAD` | `lsm/bpf` | Intercepts `BPF_PROG_LOAD` syscalls to alert on rogue or unauthorized eBPF program loads originating from non-agent processes |
+| `PROCESS_VM_READ` | `sys_enter_process_vm_readv` | Monitors cross-process memory reads (credential harvesting / memory scraping) |
+| `PROCESS_VM_WRITE` | `sys_enter_process_vm_writev` | Monitors cross-process memory writes (shellcode injection / process modification) |
 
 DNS traffic is captured separately via TC classifiers. See [Enrichment](enrichment.md#dns-interception--ip-to-domain-correlation).
 
@@ -97,3 +99,13 @@ ls /sys/bus/event_source/devices/
 If `cpu` (or `cpu_core`/`cpu_atom` on hybrid Intel) isn't listed, the sensor won't attach, and `pmu_branch_mispredict` won't appear in the active-sensor list or `/healthz`. Every other sensor is unaffected.
 
 The sysfs-detection logic has unit test coverage (`internal/ebpf/loader_pmu_test.go`) that doesn't need PMU hardware. The attach path does, and should be verified on real hardware (ideally bare metal, or a cloud VPS that shows a `cpu` entry) before you rely on it.
+
+
+## Cross-Process Memory Access (`process_vm_readv` / `process_vm_writev`)
+
+K-Guard hooks the `process_vm_readv` and `process_vm_writev` system calls to detect unauthorized inter-process memory inspection and mutation.
+
+### Why We Added It
+- **Process Injection Detection (MITRE ATT&CK T1055)**: `process_vm_writev` allows a process to write directly into another process's address space without using `ptrace` attachment routines. Adversaries use this for stealthy shellcode injection and process hollowing.
+- **Credential Dumping Detection (MITRE ATT&CK T1003)**: `process_vm_readv` allows unauthorized memory reading to harvest session keys, memory tokens, or plaintext credentials from target processes.
+- **Low Noise Profile**: Legitimate cross-process memory writes are rare outside debuggers (`gdb`, `dlv`) and profilers.

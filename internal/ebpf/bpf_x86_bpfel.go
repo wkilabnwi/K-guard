@@ -190,6 +190,16 @@ type BPFScratchBuffer struct {
 	Lin     BPFProcessLineage
 }
 
+type BPFVmReadWriteEvent struct {
+	_          structs.HostLayout
+	Hdr        BPFEventHdr
+	TargetPid  uint32
+	_          [4]byte
+	NrSegs     uint64
+	Len        uint64
+	TargetComm [16]int8
+}
+
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
@@ -231,6 +241,8 @@ const (
 	BPFProgTpMemfdCreate           = "tp_memfd_create"
 	BPFProgTpOpenat                = "tp_openat"
 	BPFProgTpOpenat2               = "tp_openat2"
+	BPFProgTpProcessVmReadv        = "tp_process_vm_readv"
+	BPFProgTpProcessVmWritev       = "tp_process_vm_writev"
 	BPFProgTpPtrace                = "tp_ptrace"
 	BPFProgTpSchedexec             = "tp_schedexec"
 	BPFProgTpSchedfork             = "tp_schedfork"
@@ -259,6 +271,7 @@ const (
 	BPFVarUnusedOpenEvent          = "unused_open_event"
 	BPFVarUnusedPmuEvent           = "unused_pmu_event"
 	BPFVarUnusedPtraceEvent        = "unused_ptrace_event"
+	BPFVarUnusedVmReadWriteEvent   = "unused_vm_read_write_event"
 )
 
 // LoadBPF returns the embedded CollectionSpec for BPF.
@@ -327,6 +340,8 @@ type BPFProgramSpecs struct {
 	TpMemfdCreate        *ebpf.ProgramSpec `ebpf:"tp_memfd_create"`
 	TpOpenat             *ebpf.ProgramSpec `ebpf:"tp_openat"`
 	TpOpenat2            *ebpf.ProgramSpec `ebpf:"tp_openat2"`
+	TpProcessVmReadv     *ebpf.ProgramSpec `ebpf:"tp_process_vm_readv"`
+	TpProcessVmWritev    *ebpf.ProgramSpec `ebpf:"tp_process_vm_writev"`
 	TpPtrace             *ebpf.ProgramSpec `ebpf:"tp_ptrace"`
 	TpSchedexec          *ebpf.ProgramSpec `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.ProgramSpec `ebpf:"tp_schedfork"`
@@ -380,6 +395,7 @@ type BPFVariableSpecs struct {
 	UnusedOpenEvent          *ebpf.VariableSpec `ebpf:"unused_open_event"`
 	UnusedPmuEvent           *ebpf.VariableSpec `ebpf:"unused_pmu_event"`
 	UnusedPtraceEvent        *ebpf.VariableSpec `ebpf:"unused_ptrace_event"`
+	UnusedVmReadWriteEvent   *ebpf.VariableSpec `ebpf:"unused_vm_read_write_event"`
 }
 
 // BPFObjects contains all objects after they have been loaded into the kernel.
@@ -458,6 +474,7 @@ type BPFVariables struct {
 	UnusedOpenEvent          *ebpf.Variable `ebpf:"unused_open_event"`
 	UnusedPmuEvent           *ebpf.Variable `ebpf:"unused_pmu_event"`
 	UnusedPtraceEvent        *ebpf.Variable `ebpf:"unused_ptrace_event"`
+	UnusedVmReadWriteEvent   *ebpf.Variable `ebpf:"unused_vm_read_write_event"`
 }
 
 // BPFPrograms contains all programs after they have been loaded into the kernel.
@@ -488,6 +505,8 @@ type BPFPrograms struct {
 	TpMemfdCreate        *ebpf.Program `ebpf:"tp_memfd_create"`
 	TpOpenat             *ebpf.Program `ebpf:"tp_openat"`
 	TpOpenat2            *ebpf.Program `ebpf:"tp_openat2"`
+	TpProcessVmReadv     *ebpf.Program `ebpf:"tp_process_vm_readv"`
+	TpProcessVmWritev    *ebpf.Program `ebpf:"tp_process_vm_writev"`
 	TpPtrace             *ebpf.Program `ebpf:"tp_ptrace"`
 	TpSchedexec          *ebpf.Program `ebpf:"tp_schedexec"`
 	TpSchedfork          *ebpf.Program `ebpf:"tp_schedfork"`
@@ -525,6 +544,8 @@ func (p *BPFPrograms) Close() error {
 		p.TpMemfdCreate,
 		p.TpOpenat,
 		p.TpOpenat2,
+		p.TpProcessVmReadv,
+		p.TpProcessVmWritev,
 		p.TpPtrace,
 		p.TpSchedexec,
 		p.TpSchedfork,

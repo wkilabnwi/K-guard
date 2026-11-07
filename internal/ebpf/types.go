@@ -28,4 +28,6 @@ const (
 	EventRwxViolation     = types.EventRwxViolation
 	EventCapabilityChange = types.EventCapabilityChange
 	EventBpfProgLoad      = types.EventBpfProgLoad
+	EventProcessVmRead    = types.EventProcessVmRead
+	EventProcessVmWrite   = types.EventProcessVmWrite
 )

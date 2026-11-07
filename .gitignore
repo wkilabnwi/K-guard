@@ -6,6 +6,8 @@ scripts/provision-vm.sh
 test/
 .env
 backup/
+rw_tst
+tst_go/
 
 #Vendor
 .vscode
